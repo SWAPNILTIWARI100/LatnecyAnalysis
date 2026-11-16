@@ -5,16 +5,22 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Order Latency Analyzer</title>
 <link rel="stylesheet" href="style.css">
+<style>
+.dchips{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
+.dchip{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid var(--bd);border-radius:8px;cursor:pointer;font-size:13px}
+.dchip.on{border-color:var(--ac)}
+.dbadge{font-size:11px;padding:1px 6px;border-radius:6px;border:1px solid var(--bd);color:var(--mut);white-space:nowrap}
+</style>
 </head>
 <body>
 <div class="wrap">
   <h1>Order Latency Analyzer</h1>
-  <p class="sub">Paste gateway logs or add any number of files (.log / .txt / .gz). Files are streamed and parsed in a background thread, so the page never freezes. Latencies are computed per QT_OrderID. Everything stays local in your browser.</p>
+  <p class="sub">Paste gateway logs or add any number of files (.log / .txt / .gz). Each file's date is read from its "OMS instance startup initiated on : DD-MON-YYYY" line, so you can pick which dates to analyze. Files are streamed and parsed in a background thread, so the page never freezes. Latencies are computed per QT_OrderID. Everything stays local in your browser.</p>
 
   <div class="grid">
     <div class="card">
       <h2>Paste logs</h2>
-      <textarea id="txt" spellcheck="false" placeholder="11:16:05.627169695  [NEW_REQUEST]  FS03_1010, Agent: ..., QT_OrderID: 5363, ClOrdID: 5363, ..."></textarea>
+      <textarea id="txt" spellcheck="false" placeholder="07:44:13.003382650  [INFO]  OMS instance startup initiated on : 16-NOV-2026&#10;11:16:05.627169695  [NEW_REQUEST]  FS03_1010, Agent: ..., QT_OrderID: 5363, ClOrdID: 5363, ..."></textarea>
     </div>
     <div class="card">
       <h2>Upload files</h2>
@@ -36,6 +42,11 @@
       </div>
       <div class="flist" id="flist"></div>
     </div>
+  </div>
+
+  <div class="card" id="dcard" style="display:none;margin-bottom:16px">
+    <div class="top"><h2 style="margin:0">Dates found (select which to analyze)</h2><span><button id="dall">All</button> <button id="dnone">None</button></span></div>
+    <div class="dchips" id="dchips"></div>
   </div>
 
   <div class="btns">
@@ -97,10 +108,11 @@ Grow.prototype.push=function(v){
 var EQ,EK,ET,EN,ES;                   /* events: order idx, key, start ts (ns), latency (ns), status id */
 var Omap,Oqt,Ocl,Oex,Oac,Osec,Osd,Oqy,Opr,ON,OS;   /* orders */
 var Q,R,cmap,stArr,stMap,stRej,scanned,matched,ready=false;
+var Odl=[],curOff=0,curDi=0,curDl="",DM=[],dayLbl={};   /* per-date context */
 
 function reset(){
   EQ=new Grow(Uint32Array);EK=new Grow(Uint8Array);ET=new Grow(Float64Array);EN=new Grow(Float64Array);ES=new Grow(Uint16Array);
-  Omap=new Map();Oqt=[];Ocl=[];Oex=[];Oac=[];Osec=[];Osd=[];Oqy=[];Opr=[];
+  Omap=new Map();Odl=[];Oqt=[];Ocl=[];Oex=[];Oac=[];Osec=[];Osd=[];Oqy=[];Opr=[];
   ON=new Grow(Uint32Array,6144);OS=new Grow(Float64Array,6144);
   Q=new Map();R=new Map();cmap=new Map();
   stArr=[""];stMap=new Map([["",0]]);stRej=[false];
@@ -112,9 +124,9 @@ function sid(s){
   return i;
 }
 function getOrder(qt){
-  var i=Omap.get(qt);
+  var key=curDi+"\u0001"+qt,i=Omap.get(key);
   if(i===undefined){
-    i=Oqt.length;Omap.set(qt,i);Oqt.push(qt);Ocl.push("");Oex.push("");Oac.push("");Osec.push("");Osd.push("");Oqy.push("");Opr.push("");
+    i=Oqt.length;Omap.set(key,i);Oqt.push(qt);Odl.push(curDl);Ocl.push("");Oex.push("");Oac.push("");Osec.push("");Osd.push("");Oqy.push("");Opr.push("");
     for(var k=0;k<6;k++){ON.push(0);OS.push(0)}
   }
   return i;
@@ -166,7 +178,7 @@ function handle(line){
       var tag=line.substring(i+1,j),c=TAGC.get(tag);
       if(c===undefined)c=TAGC.get(tag.toUpperCase());
       if(c===undefined)return;
-      proc(c,t,line.substring(j+1));
+      proc(c,t+curOff,line.substring(j+1));
       return;
     }
     i=line.indexOf("[",j+1);
@@ -175,8 +187,9 @@ function handle(line){
 
 function proc(c,t,r){
   var qt=getF(r,"QT_OrderID"),cl=getF(r,"ClOrdID"),x,a,q;
-  if(qt&&cl&&qt!==cl)cmap.set(cl,qt);
-  if(!qt)qt=cl?(cmap.get(cl)||cl):"";
+  var ck=curDi+"\u0001"+cl;
+  if(qt&&cl&&qt!==cl)cmap.set(ck,qt);
+  if(!qt)qt=cl?(cmap.get(ck)||cl):"";
   if(!qt)return;
   var o=getOrder(qt);
   matched++;
@@ -234,12 +247,14 @@ function calc(s){
 }
 
 /* ---- streaming reader: any number of files, any size, optional .gz ---- */
-async function run(items){
+async function run(items,dm){
   reset();
+  DM=dm||[];dayLbl={};DM.forEach(function(d){dayLbl[d.n]=d.l});
   var total=0,done=0,last=0,start=performance.now(),fi,i;
   for(i=0;i<items.length;i++)total+=items[i].blob.size;
   for(fi=0;fi<items.length;fi++){
-    var it=items[fi],gz=/\.gz$/i.test(it.name)&&typeof DecompressionStream!=="undefined",stream=it.blob.stream();
+    var it=items[fi];curOff=it.off||0;curDi=it.di||0;curDl=it.dl||"";
+    var gz=/\.gz$/i.test(it.name)&&typeof DecompressionStream!=="undefined",stream=it.blob.stream();
     if(gz)stream=stream.pipeThrough(new DecompressionStream("gzip"));
     var rd=stream.getReader(),dec=new TextDecoder("utf-8"),carry="",fb=0,pos,nl,end,txt;
     for(;;){
@@ -281,7 +296,7 @@ function finish(ms){
   Q.clear();R.clear();cmap.clear();
   statsCache=stats;
   ready=true;
-  postMessage({type:"done",ml:ML,stats:stats,orders:Oqt.length,scanned:scanned,matched:matched,events:N,ms:ms});
+  postMessage({type:"done",ml:ML,stats:stats,orders:Oqt.length,scanned:scanned,matched:matched,events:N,ms:ms,dmap:DM});
 }
 
 /* ---- per-order table (paged/filtered here, only 500 rows cross to the UI) ---- */
@@ -294,7 +309,7 @@ function ordersQ(m){
     if(rows.length<500){
       var r=[Oqt[i],Osec[i],Osd[i],Oqy[i],Opr[i]];
       for(k=0;k<6;k++){var c=ON.a[i*6+k];r.push(c?OS.a[i*6+k]/c:null)}
-      rows.push(r);
+      r.push(Odl[i]);rows.push(r);
     }
   }
   postMessage({type:"orders",id:m.id,rows:rows,total:total,q:q});
@@ -409,7 +424,7 @@ async function zip(files){
 }
 function r3(ns){return Math.round(ns)/1000}
 function p2(n){return (n<10?"0":"")+n}
-function fmtT(ns){var s=Math.floor(ns/1e9),f=Math.round(ns-s*1e9);return p2(Math.floor(s/3600))+":"+p2(Math.floor(s%3600/60))+":"+p2(s%60)+"."+("00000000"+f).slice(-9)}
+function fmtT(ns){var s=Math.floor(ns/1e9),f=Math.round(ns-s*1e9),d=Math.floor(s/86400),x=s-d*86400,l=dayLbl[d];return (l&&l!=="(no date)"?l+" ":"")+p2(Math.floor(x/3600))+":"+p2(Math.floor(x%3600/60))+":"+p2(x%60)+"."+("00000000"+f).slice(-9)}
 
 async function excel(){
   if(!ready)return;
@@ -422,7 +437,7 @@ async function excel(){
     return s?[m[1],s.n,r3(s.avg),r3(s.min),r3(s.max),r3(s.p50),r3(s.p90),r3(s.p99),r3(s.a90),r3(s.a99)]:[m[1],0];
   });
   sheets.push({name:"Summary",res:await buildSheet(["Metric","Count","Avg (us)","Min (us)","Max (us)","P50 (us)","P90 (us)","P99 (us)","Avg <=P90 (us)","Avg <=P99 (us)"],sumRows.length,function(r){return sumRows[r]})});
-  var oHead=["QT_OrderID","ClOrdID","ExchOrderID","QT_Account","SecurityID","Side","Quantity","Price"];
+  var oHead=["QT_OrderID","Date","ClOrdID","ExchOrderID","QT_Account","SecurityID","Side","Quantity","Price"];
   for(k=0;k<6;k++)oHead.push(ML[KEYIDX[k]][1]+" (us)");
   oHead.push("Modify count","Cancel count");
   var p;
@@ -434,7 +449,7 @@ async function excel(){
   for(i=1;i<sheets.length;i++){
     var sh=sheets[i];
     sh.res=await buildSheet(oHead,sh._c,function(r){
-      var o=sh._a+r,row=[Oqt[o],Ocl[o],Oex[o],Oac[o],Osec[o],Osd[o],Oqy[o]===""?"":+Oqy[o],Opr[o]===""?"":+Opr[o]],kk,c;
+      var o=sh._a+r,row=[Oqt[o],Odl[o],Ocl[o],Oex[o],Oac[o],Osec[o],Osd[o],Oqy[o]===""?"":+Oqy[o],Opr[o]===""?"":+Opr[o]],kk,c;
       for(kk=0;kk<6;kk++){c=ON.a[o*6+kk];row.push(c?r3(OS.a[o*6+kk]/c):"")}
       row.push(ON.a[o*6+1],ON.a[o*6+2]);
       return row;
@@ -477,7 +492,7 @@ onmessage=function(e){
   function fail(err){postMessage({type:"error",msg:String(err&&err.message||err)})}
   try{
     if(m.cmd==="analyze"){
-      run(m.items).then(function(){},fail);
+      run(m.items,m.dmap).then(function(){},fail);
     }else if(m.cmd==="orders")ordersQ(m);
     else if(m.cmd==="panel")panel(m);
     else if(m.cmd==="excel")excel().catch(fail);
@@ -492,6 +507,7 @@ onmessage=function(e){
 "use strict";
 var $=function(i){return document.getElementById(i)};
 var W=null,wurl=null,seq=0,state=null,files=[],busy=false,oseq=0,oqt=null;
+var meta=new Map(),sel={},pasteD=null,pasteT=0,multi=false,dayLbl={};
 var OHEAD=["New\u2192Exch","Mod\u2192Exch","Can\u2192Exch","New RTT","Mod RTT","Can RTT"];
 var COLS=["Count","Average","Min","Max","P50","P90","P99","Avg \u2264P90","Avg \u2264P99"];
 var PANELS=[
@@ -528,17 +544,61 @@ function setBusy(b){
   if(b){$("bar").style.width="0";$("inb").disabled=$("exb").disabled=$("xls").disabled=true}
 }
 
-function run(){
-  var list=orderedFiles(),t=$("txt").value,items=list.map(function(f){return {name:f.name,blob:f}});
-  if(t.trim())items.push({name:"pasted text",blob:new Blob([t])});
-  if(!items.length){$("msg").textContent="Paste logs or add files first.";return}
+/* ---------- date detection / selection ---------- */
+var DRE=/OMS instance startup initiated on\s*:\s*(\d{1,2})-([A-Za-z]{3})-(\d{4})/,
+ MON={JAN:0,FEB:1,MAR:2,APR:3,MAY:4,JUN:5,JUL:6,AUG:7,SEP:8,OCT:9,NOV:10,DEC:11};
+function parseDate(t){var m=DRE.exec(t);if(!m)return null;var mo=MON[m[2].toUpperCase()];if(mo==null)return null;var d=+m[1],y=+m[3];
+  return {key:y+"-"+p2(mo+1)+"-"+p2(d),ms:Date.UTC(y,mo,d),lbl:p2(d)+"-"+m[2].toUpperCase()+"-"+y}}
+async function scanFile(f){
+  var LIM=4194304;
+  if(!(/\.gz$/i.test(f.name)&&typeof DecompressionStream!=="undefined"))return parseDate(await f.slice(0,LIM).text());
+  var rd=f.stream().pipeThrough(new DecompressionStream("gzip")).getReader(),dec=new TextDecoder(),buf="",n=0,r,d;
+  try{for(;;){r=await rd.read();if(r.done)break;n+=r.value.length;buf+=dec.decode(r.value,{stream:true});d=parseDate(buf);if(d)return d;if(n>LIM)break;buf=buf.slice(-200)}}catch(e){}
+  finally{rd.cancel().catch(function(){})}
+  return null;
+}
+function dbadge(f){var m=meta.get(fkey(f));return m?'<span class="dbadge">'+(m.ready?(m.d?m.d.lbl:"no date"):"scanning...")+'</span> ':""}
+function groups(){
+  var g={},list=[];
+  function add(d,size){var k=d?d.key:"none";if(!g[k]){g[k]={key:k,ms:d?d.ms:null,lbl:d?d.lbl:"(no date)",n:0,bytes:0};list.push(g[k])}g[k].n++;g[k].bytes+=size}
+  files.forEach(function(f){var m=meta.get(fkey(f));if(m&&m.ready)add(m.d,f.size)});
+  if($("txt").value.trim())add(pasteD,$("txt").value.length);
+  list.sort(function(a,b){return a.key==="none"?1:b.key==="none"?-1:a.key<b.key?-1:1});
+  list.forEach(function(x){if(sel[x.key]===undefined)sel[x.key]=true});
+  return list;
+}
+function renderDates(){
+  var gs=groups(),h="";
+  gs.forEach(function(x){h+='<label class="dchip'+(sel[x.key]?' on':'')+'"><input type="checkbox" data-d="'+x.key+'"'+(sel[x.key]?' checked':'')+'> <b>'+x.lbl+'</b> <span class="dbadge">'+x.n+' source'+(x.n>1?'s':'')+' &middot; '+fmtSz(x.bytes)+'</span></label>'});
+  $("dchips").innerHTML=h;$("dcard").style.display=gs.length?"block":"none";
+}
+$("dchips").onchange=function(e){var k=e.target.getAttribute("data-d");if(k){sel[k]=e.target.checked;renderDates()}};
+$("dall").onclick=function(){for(var k in sel)sel[k]=true;renderDates()};
+$("dnone").onclick=function(){for(var k in sel)sel[k]=false;renderDates()};
+$("txt").addEventListener("input",function(){clearTimeout(pasteT);pasteT=setTimeout(function(){pasteD=parseDate($("txt").value.slice(0,4194304));renderDates()},300)});
+
+async function run(){
+  $("msg").textContent="Reading dates...";
+  await Promise.all(files.map(function(f){var m=meta.get(fkey(f));return m&&m.p}));
+  pasteD=parseDate($("txt").value.slice(0,4194304));
+  var gs=groups().filter(function(x){return sel[x.key]}),list=orderedFiles(),t=$("txt").value;
+  if(!gs.length){$("msg").textContent=(files.length||t.trim())?"Select at least one date.":"Paste logs or add files first.";return}
+  var dated=gs.filter(function(x){return x.ms!=null}),min=dated.length?dated[0].ms:0,
+      gap=dated.length?(dated[dated.length-1].ms-min)/864e5:-1,items=[],dm=[];
+  gs.forEach(function(x,di){
+    var off=(x.ms!=null?(x.ms-min)/864e5:gap+1)*864e11;
+    dm.push({n:Math.round(off/864e11),l:x.lbl});
+    list.forEach(function(f){var m=meta.get(fkey(f)),k=m&&m.d?m.d.key:"none";if(k===x.key)items.push({name:f.name,blob:f,off:off,di:di,dl:x.lbl})});
+    if(t.trim()&&(pasteD?pasteD.key:"none")===x.key)items.push({name:"pasted text",blob:new Blob([t]),off:off,di:di,dl:x.lbl});
+  });
+  if(!items.length){$("msg").textContent="Nothing to process for the selected dates.";return}
   killWorker();
   try{W=newWorker()}catch(e){fail("Could not start a background worker ("+e.message+"). Open the page over http://localhost or from a normal browser tab.");return}
   state=null;$("res").style.display="none";
   PANELS.forEach(function(p){$("p_"+p.id).style.display="none";p.data=null});
   $("msg").textContent="";setBusy(true);
   $("ptxt").textContent="Starting...";
-  W.postMessage({cmd:"analyze",items:items});
+  W.postMessage({cmd:"analyze",items:items,dmap:dm});
 }
 
 function onMsg(e){
@@ -549,10 +609,13 @@ function onMsg(e){
     var mbs=m.el>0?(m.bytes/1048576)/(m.el/1000):0;
     $("ptxt").textContent="File "+(m.fi+1)+"/"+m.nf+" \u00b7 "+m.name+" \u00b7 "+(m.gz?"decompressing":(m.pct*100).toFixed(0)+"%")+" \u00b7 "+fmtN(m.scanned)+" lines"+(m.gz?"":" \u00b7 "+mbs.toFixed(0)+" MB/s");
   }else if(m.type==="done"){
-    state=m;busy=false;setBusy(false);
+    state=m;multi=m.dmap.length>1;dayLbl={};
+    var yrs={};m.dmap.forEach(function(d){yrs[d.l.slice(-4)]=1});
+    m.dmap.forEach(function(d){dayLbl[d.n]=(Object.keys(yrs).length>1||d.l.charAt(0)==="(")?d.l:d.l.slice(0,6)});
+    busy=false;setBusy(false);
     render();
     $("xls").disabled=$("exb").disabled=$("inb").disabled=false;
-    $("msg").textContent="Done: "+fmtN(m.scanned)+" lines scanned, "+fmtN(m.orders)+" orders, "+fmtN(m.events)+" measurements in "+(m.ms/1000).toFixed(1)+" s.";
+    $("msg").textContent="Done: "+fmtN(m.scanned)+" lines scanned, "+fmtN(m.orders)+" orders, "+fmtN(m.events)+" measurements across "+m.dmap.length+" date"+(m.dmap.length>1?"s":"")+" in "+(m.ms/1000).toFixed(1)+" s.";
     requestOrders("");
   }else if(m.type==="orders"){
     if(m.id===oseq)renderOrders(m);
@@ -577,9 +640,9 @@ function fkey(f){return f.name+"|"+f.size+"|"+f.lastModified}
 function addFiles(fl){
   if(!fl||!fl.length)return;
   var have={};files.forEach(function(f){have[fkey(f)]=1});
-  Array.prototype.forEach.call(fl,function(f){if(!have[fkey(f)]){files.push(f);have[fkey(f)]=1}});
+  Array.prototype.forEach.call(fl,function(f){var k=fkey(f);if(!have[k]){files.push(f);have[k]=1;var m={ready:false,d:null};m.p=scanFile(f).catch(function(){return null}).then(function(d){m.d=d;m.ready=true;renderFiles();renderDates()});meta.set(k,m)}});
   renderFiles();
-  $("msg").textContent=files.length+" file(s) queued. Click \"Calculate latency\".";
+  $("msg").textContent=files.length+" file(s) queued. Pick dates, then click \"Calculate latency\".";
 }
 function orderedFiles(){
   var a=files.slice(),m=$("ord").value;
@@ -589,13 +652,13 @@ function orderedFiles(){
 }
 function renderFiles(){
   var a=orderedFiles(),tot=0,h="";
-  a.forEach(function(f,i){tot+=f.size;h+='<div class="frow"><span class="n" title="'+esc(f.name)+'">'+(i+1)+". "+esc(f.name)+'</span><span class="s">'+fmtSz(f.size)+'</span><button data-k="'+esc(fkey(f))+'" title="Remove">&times;</button></div>'});
+  a.forEach(function(f,i){tot+=f.size;h+='<div class="frow"><span class="n" title="'+esc(f.name)+'">'+(i+1)+". "+esc(f.name)+'</span><span class="s">'+dbadge(f)+fmtSz(f.size)+'</span><button data-k="'+esc(fkey(f))+'" title="Remove">&times;</button></div>'});
   $("flist").innerHTML=h;
   $("ftot").textContent=a.length?a.length+" file"+(a.length>1?"s":"")+" \u00b7 "+fmtSz(tot):"";
 }
 $("flist").onclick=function(e){
   var b=e.target.closest&&e.target.closest("button[data-k]");if(!b)return;
-  var k=b.getAttribute("data-k");files=files.filter(function(f){return fkey(f)!==k});renderFiles();
+  var k=b.getAttribute("data-k");files=files.filter(function(f){return fkey(f)!==k});renderFiles();renderDates();
 };
 $("ord").onchange=renderFiles;
 
@@ -616,9 +679,9 @@ function render(){
 }
 function requestOrders(q){oseq++;W&&W.postMessage({cmd:"orders",q:q,id:oseq})}
 function renderOrders(m){
-  var h="<thead><tr><th>QT_OrderID</th><th>Security</th><th>Side</th><th>Qty</th><th>Price</th>"+OHEAD.map(function(x){return "<th>"+x+"</th>"}).join("")+"</tr></thead><tbody>";
+  var h="<thead><tr><th>QT_OrderID</th>"+(multi?"<th>Date</th>":"")+"<th>Security</th><th>Side</th><th>Qty</th><th>Price</th>"+OHEAD.map(function(x){return "<th>"+x+"</th>"}).join("")+"</tr></thead><tbody>";
   m.rows.forEach(function(r){
-    h+="<tr><td>"+esc(r[0])+"</td><td>"+esc(r[1])+"</td><td>"+esc(r[2])+"</td><td>"+esc(r[3])+"</td><td>"+esc(r[4])+"</td>";
+    h+="<tr><td>"+esc(r[0])+"</td>"+(multi?"<td>"+esc(r[11])+"</td>":"")+"<td>"+esc(r[1])+"</td><td>"+esc(r[2])+"</td><td>"+esc(r[3])+"</td><td>"+esc(r[4])+"</td>";
     for(var i=5;i<11;i++)h+="<td>"+(r[i]==null?'<span class="na">-</span>':us(r[i]))+"</td>";
     h+="</tr>";
   });
@@ -627,17 +690,22 @@ function renderOrders(m){
 }
 
 /* ---------- time / chart helpers ---------- */
-function parseT(s,end){s=(s||"").trim();if(!s)return null;var m=/^(\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$/.exec(s);if(!m)return NaN;
-  var v=((+m[1])*3600+(+m[2])*60+(+(m[3]||0)))*1e9+(+((m[4]||"")+"000000000").slice(0,9));
-  if(end&&m[4]==null)v+=(m[3]!=null?1e9:60e9)-1;return v}
+function parseT(s,end){s=(s||"").trim();if(!s)return null;
+  var m=/^(?:(\d{1,2}-[A-Za-z]{3}(?:-\d{4})?)\s+)?(\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$/.exec(s);if(!m)return NaN;
+  var off=0;
+  if(m[1]){var u=m[1].toUpperCase().replace(/^0/,""),hit=null;((state&&state.dmap)||[]).forEach(function(d){if(d.l.replace(/^0/,"").indexOf(u)===0)hit=d});if(!hit)return NaN;off=hit.n*864e11}
+  var v=off+((+m[2])*3600+(+m[3])*60+(+(m[4]||0)))*1e9+(+((m[5]||"")+"000000000").slice(0,9));
+  if(end&&m[5]==null)v+=(m[4]!=null?1e9:60e9)-1;return v}
 function p2(n){return (n<10?"0":"")+n}
-function fmtT(ns){var s=Math.floor(ns/1e9),f=Math.round(ns-s*1e9);return p2(Math.floor(s/3600))+":"+p2(Math.floor(s%3600/60))+":"+p2(s%60)+"."+("00000000"+f).slice(-9)}
+function fmtT(ns,len){var s=Math.floor(ns/1e9),f=Math.round(ns-s*1e9),d=Math.floor(s/86400),x=s-d*86400,
+  t=p2(Math.floor(x/3600))+":"+p2(Math.floor(x%3600/60))+":"+p2(x%60)+"."+("00000000"+f).slice(-9),l=multi&&dayLbl[d];
+  return (l?l+" ":"")+(len?t.slice(0,len):t)}
 function cssv(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim()}
 function cv(id,h){var c=$(id),w=c.parentNode.clientWidth,d=window.devicePixelRatio||1;c.style.width=w+"px";c.style.height=h+"px";c.width=Math.round(w*d);c.height=Math.round(h*d);var g=c.getContext("2d");g.setTransform(d,0,0,d,0,0);g.clearRect(0,0,w,h);c._hits=[];return {c:c,g:g,w:w,h:h}}
 function niceMax(v){if(!(v>0))return 1;var p=Math.pow(10,Math.floor(Math.log10(v))),n=v/p;return (n<=1?1:n<=2?2:n<=5?5:10)*p}
 function fy(v,int){return int?String(Math.round(v)):v>=100?v.toFixed(0):v>=10?v.toFixed(1):v.toFixed(2)}
 function bsName(b){return b>=3.6e12?"1 hour":b>=6e11?"10 min":b>=3e11?"5 min":b>=6e10?"1 min":b>=1e10?"10 s":b>=1e9?"1 s":b>=1e8?"100 ms":b>=1e7?"10 ms":"1 ms"}
-function winLbl(t0,bs,k,short){var f=bs>=1e9?8:12,a=fmtT(t0+k*bs).slice(0,f);return short?a:a+" \u2013 "+fmtT(t0+(k+1)*bs).slice(0,f)}
+function winLbl(t0,bs,k,short){var f=bs>=1e9?8:12,a=fmtT(t0+k*bs,f);return short?a:a+" \u2013 "+fmtT(t0+(k+1)*bs,f)}
 function pearson(x,y){var n=x.length,i,mx=0,my=0,sxy=0,sxx=0,syy=0;if(n<3)return null;for(i=0;i<n;i++){mx+=x[i];my+=y[i]}mx/=n;my/=n;for(i=0;i<n;i++){sxy+=(x[i]-mx)*(y[i]-my);sxx+=(x[i]-mx)*(x[i]-mx);syy+=(y[i]-my)*(y[i]-my)}return sxx&&syy?sxy/Math.sqrt(sxx*syy):null}
 function hover(id){
   var c=$(id),pend=null;
@@ -667,7 +735,7 @@ function xt(o,G,f){var g=o.g,i;g.fillStyle=cssv("--mut");g.textAlign="center";fo
 function scatter(id,pts,p99,top,t0,tend){
   var o=cv(id,300),G=grid(o,niceMax(top[0].ns/1000),"\u00b5s"),g=o.g,span=Math.max(tend-t0,1);
   function X(t){return G.L+(t-t0)/span*G.pw}
-  xt(o,G,function(f){return fmtT(t0+span*f).slice(0,span<1e9?12:8)});
+  xt(o,G,function(f){return fmtT(t0+span*f,span<1e9?12:8)});
   g.globalAlpha=.7;
   pts.forEach(function(e){var x=X(e.t),y=G.Y(e.ns/1000);g.fillStyle=TCOL[e.k];g.beginPath();g.arc(x,y,2.5,0,6.2832);g.fill();
     o.c._hits.push({cx:x,cy:y,html:"<b>QT "+esc(e.qt)+"</b> ("+e.k+")<br>"+us(e.ns)+" \u00b5s<br>status "+esc(e.st)+"<br>from "+fmtT(e.t)+"<br>to "+fmtT(e.t+e.ns)})});
@@ -727,7 +795,7 @@ function mkPanels(){
       '<div class="grid">'+cbox(i+"_c4","Latency distribution","red = tail above P99")+cbox(i+"_c5","Load vs latency",'each dot = one time window; dashed = trend')+'</div>'+
       '<div class="grid"><div><h2>Top 10 largest latencies</h2><div class="tw"><table id="t_'+i+'"></table></div></div><div><h2>Highest-latency time windows</h2><div class="tw"><table id="h_'+i+'"></table></div></div></div></div>';
     $("panels").appendChild(d);
-    $("a_"+i).onclick=function(){var a=parseT($("f_"+i).value,0),b=parseT($("u_"+i).value,1);if(a!==a||b!==b){$("g_"+i).textContent="Use HH:MM, HH:MM:SS or HH:MM:SS.mmm";return}p.f=a;p.u=b;renderPanel(p)};
+    $("a_"+i).onclick=function(){var a=parseT($("f_"+i).value,0),b=parseT($("u_"+i).value,1);if(a!==a||b!==b){$("g_"+i).textContent="Use HH:MM, HH:MM:SS or HH:MM:SS.mmm (optionally prefixed with a date, e.g. 17-NOV 09:30)";return}p.f=a;p.u=b;renderPanel(p)};
     $("r_"+i).onclick=function(){$("f_"+i).value="";$("u_"+i).value="";p.f=null;p.u=null;renderPanel(p)};
     ["ALL","NEW","MODIFY","CANCEL"].forEach(function(t){var b=document.createElement("button");b.textContent=t==="ALL"?"All":t;b.dataset.t=t;b.onclick=function(){p.t=t;renderPanel(p)};$("s_"+i).appendChild(b)});
   });
@@ -741,7 +809,7 @@ function renderPanel(p){
 }
 function drawPanel(p){
   var d=p.data,i=p.id,k=$("k_"+i);
-  if(d.base){$("f_"+i).placeholder=fmtT(d.lo).slice(0,12);$("u_"+i).placeholder=fmtT(d.hi).slice(0,12)}
+  if(d.base){$("f_"+i).placeholder=fmtT(d.lo,12);$("u_"+i).placeholder=fmtT(d.hi,12)}
   $("g_"+i).textContent=(p.f!=null||p.u!=null)?fmtN(d.n)+" of "+fmtN(d.base)+" samples in range":"";
   Array.prototype.forEach.call($("s_"+i).children,function(b){b.className=b.dataset.t===p.t?"on":""});
   $("b_"+i).style.display=d.n?"block":"none";
@@ -802,14 +870,16 @@ $("inb").onclick=function(){showPanel("in")};
 window.addEventListener("resize",function(){clearTimeout(rz);rz=setTimeout(function(){PANELS.forEach(function(p){if(p.data&&$("p_"+p.id).style.display==="block")drawPanel(p)})},150)});
 $("q").oninput=function(e){var v=e.target.value.trim();clearTimeout(ot);ot=setTimeout(function(){requestOrders(v)},200)};
 $("clr").onclick=function(){
-  killWorker();setBusy(false);files=[];renderFiles();
+  killWorker();setBusy(false);files=[];meta.clear();sel={};pasteD=null;renderFiles();
   $("txt").value="";$("res").style.display="none";
   PANELS.forEach(function(p){$("p_"+p.id).style.display="none";p.data=null});
   $("xls").disabled=$("exb").disabled=$("inb").disabled=true;$("msg").textContent="";state=null;
+  renderDates();
 };
 $("smp").onclick=function(){
-  files=[];renderFiles();
+  files=[];meta.clear();renderFiles();
   $("txt").value=["paste here"].join("\n");
+  pasteD=parseDate($("txt").value);renderDates();
   run();
 };
 window.addEventListener("beforeunload",killWorker);
