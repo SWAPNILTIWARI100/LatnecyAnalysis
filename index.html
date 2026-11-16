@@ -5,36 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Order Latency Analyzer</title>
 <link rel="stylesheet" href="style.css">
-<style>
-.dchips{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
-.dchip{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid var(--bd);border-radius:8px;cursor:pointer;font-size:13px}
-.dchip.on{border-color:var(--ac)}
-
-body{font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
-h1{letter-spacing:-.02em;background:linear-gradient(90deg,var(--ac),var(--ac2));-webkit-background-clip:text;background-clip:text;color:transparent}
-.card{border-radius:14px;box-shadow:0 1px 2px rgba(0,0,0,.15),0 10px 28px rgba(0,0,0,.10)}
-.kpi{border-top:3px solid var(--ac);transition:transform .15s}
-.kpi:hover{transform:translateY(-2px)}
-button{border-radius:10px;transition:transform .12s,filter .12s,opacity .12s}
-button:hover:not(:disabled){transform:translateY(-1px);filter:brightness(1.08)}
-button:active:not(:disabled){transform:none}
-.btns{position:sticky;top:0;z-index:30;padding:10px 0;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
-tbody tr:nth-child(even){background:rgba(127,127,127,.06)}
-tbody tr:hover{background:rgba(127,127,127,.15)}
-.dchip{transition:background .15s,border-color .15s}
-.dchip.on{background:rgba(127,127,127,.12)}
-.dbadge{margin-left:6px}
-#dwbody h3{margin:18px 0 6px;font-size:15px}
-#dwbody .sub2{font-size:12px;color:var(--mut);margin:0 0 8px}
-#dwbody tr.all td{font-weight:600;border-top:1px solid var(--bd)}
-#dwbody td.num{font-variant-numeric:tabular-nums}
-.insight{border-radius:10px}
-.dbadge{font-size:11px;padding:1px 6px;border-radius:6px;border:1px solid var(--bd);color:var(--mut);white-space:nowrap}
-</style>
+<script>try{var __t=localStorage.getItem("ola-theme");if(__t)document.documentElement.setAttribute("data-theme",__t)}catch(e){}</script>
 </head>
 <body>
 <div class="wrap">
-  <h1>Order Latency Analyzer</h1>
+  <div class="hdr"><h1>Order Latency Analyzer</h1><button id="thm" class="ghost" title="Toggle light / dark theme" aria-label="Toggle theme">&#9680;</button></div>
   <p class="sub">Paste gateway logs or add any number of files (.log / .txt / .gz). Two log formats are auto-detected line by line: (1) OMS logs with [NEW_REQUEST] / [EXCH_ORDER_REQUEST] / [EXCH_ORDER_RESPONSE] tags, and (2) gateway logs with [YYYY-MM-DD HH:MM:SS.uuuuuu][INFO][R_IN] / [EX_SND] / [R_OUT] lines, matched on ClOrdID (FIX tag 11). Each file's date is read from the "OMS instance startup initiated on : DD-MON-YYYY" line or from the first log timestamp, so you can pick which dates to analyze. Files are streamed and parsed in a background thread, so the page never freezes. Latencies are computed per QT_OrderID. Everything stays local in your browser.</p>
 
   <div class="grid">
@@ -1015,6 +990,11 @@ function showDW(){
   renderDW();$("pdw").style.display="block";$("pdw").scrollIntoView({behavior:"smooth",block:"start"});
 }
 $("dwb").onclick=showDW;
+$("thm").onclick=function(){
+  var r=document.documentElement,cur=r.getAttribute("data-theme")||(window.matchMedia&&matchMedia("(prefers-color-scheme:light)").matches?"light":"dark"),n=cur==="light"?"dark":"light";
+  r.setAttribute("data-theme",n);try{localStorage.setItem("ola-theme",n)}catch(e){}
+  window.dispatchEvent(new Event("resize"));          /* redraw canvases with the new colours */
+};
 
 
 /* ---------- UI wiring ---------- */
