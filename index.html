@@ -9,18 +9,38 @@
 .dchips{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
 .dchip{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid var(--bd);border-radius:8px;cursor:pointer;font-size:13px}
 .dchip.on{border-color:var(--ac)}
+
+body{font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
+h1{letter-spacing:-.02em;background:linear-gradient(90deg,var(--ac),var(--ac2));-webkit-background-clip:text;background-clip:text;color:transparent}
+.card{border-radius:14px;box-shadow:0 1px 2px rgba(0,0,0,.15),0 10px 28px rgba(0,0,0,.10)}
+.kpi{border-top:3px solid var(--ac);transition:transform .15s}
+.kpi:hover{transform:translateY(-2px)}
+button{border-radius:10px;transition:transform .12s,filter .12s,opacity .12s}
+button:hover:not(:disabled){transform:translateY(-1px);filter:brightness(1.08)}
+button:active:not(:disabled){transform:none}
+.btns{position:sticky;top:0;z-index:30;padding:10px 0;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+tbody tr:nth-child(even){background:rgba(127,127,127,.06)}
+tbody tr:hover{background:rgba(127,127,127,.15)}
+.dchip{transition:background .15s,border-color .15s}
+.dchip.on{background:rgba(127,127,127,.12)}
+.dbadge{margin-left:6px}
+#dwbody h3{margin:18px 0 6px;font-size:15px}
+#dwbody .sub2{font-size:12px;color:var(--mut);margin:0 0 8px}
+#dwbody tr.all td{font-weight:600;border-top:1px solid var(--bd)}
+#dwbody td.num{font-variant-numeric:tabular-nums}
+.insight{border-radius:10px}
 .dbadge{font-size:11px;padding:1px 6px;border-radius:6px;border:1px solid var(--bd);color:var(--mut);white-space:nowrap}
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>Order Latency Analyzer</h1>
-  <p class="sub">Paste gateway logs or add any number of files (.log / .txt / .gz). Each file's date is read from its "OMS instance startup initiated on : DD-MON-YYYY" line, so you can pick which dates to analyze. Files are streamed and parsed in a background thread, so the page never freezes. Latencies are computed per QT_OrderID. Everything stays local in your browser.</p>
+  <p class="sub">Paste gateway logs or add any number of files (.log / .txt / .gz). Two log formats are auto-detected line by line: (1) OMS logs with [NEW_REQUEST] / [EXCH_ORDER_REQUEST] / [EXCH_ORDER_RESPONSE] tags, and (2) gateway logs with [YYYY-MM-DD HH:MM:SS.uuuuuu][INFO][R_IN] / [EX_SND] / [R_OUT] lines, matched on ClOrdID (FIX tag 11). Each file's date is read from the "OMS instance startup initiated on : DD-MON-YYYY" line or from the first log timestamp, so you can pick which dates to analyze. Files are streamed and parsed in a background thread, so the page never freezes. Latencies are computed per QT_OrderID. Everything stays local in your browser.</p>
 
   <div class="grid">
     <div class="card">
       <h2>Paste logs</h2>
-      <textarea id="txt" spellcheck="false" placeholder="07:44:13.003382650  [INFO]  OMS instance startup initiated on : 16-NOV-2026&#10;11:16:05.627169695  [NEW_REQUEST]  FS03_1010, Agent: ..., QT_OrderID: 5363, ClOrdID: 5363, ..."></textarea>
+      <textarea id="txt" spellcheck="false" placeholder="07:44:13.003382650  [INFO]  OMS instance startup initiated on : 16-NOV-2026&#10;11:16:05.627169695  [NEW_REQUEST]  FS03_1010, Agent: ..., QT_OrderID: 5363, ClOrdID: 5363, ...&#10;[2026-11-16 12:10:05.853393][INFO][R_IN] 8=FIX.4.2|...|35=G|...|11=330945296|..."></textarea>
     </div>
     <div class="card">
       <h2>Upload files</h2>
@@ -53,6 +73,7 @@
     <button class="pri" id="go">Calculate latency</button>
     <button id="inb" disabled>Internal analysis</button>
     <button id="exb" disabled>Exch analysis</button>
+    <button id="dwb" disabled>Date-wise analysis</button>
     <button id="xls" disabled>Download Excel</button>
     <button id="smp">Load sample</button>
     <button id="clr">Clear</button>
@@ -65,6 +86,8 @@
 
   <div id="res">
     <div class="kpis" id="kpis"></div>
+    <div class="card" id="skcard" style="display:none;margin-bottom:16px"><div class="top"><h2 style="margin:0">Skipped orders <span class="dbadge" id="skn"></span></h2></div><div class="note">Skipped because the step time difference is negative or longer than 5 hours (log clocks / timezones out of sync, e.g. EX_SND logged 5:30 h away from R_IN). They are excluded from every statistic and graph.</div><div class="tw mx"><table id="skt"></table></div></div>
+    <div class="card" id="pdw" style="display:none;margin-bottom:16px"><div class="top"><h2 style="margin:0">Date-wise analysis</h2></div><div class="note">One block per log date. If a date has files in different log formats, each format is listed separately (Type 1 = NEW_REQUEST / EXCH_* tags, Type 2 = R_IN / EX_SND / R_OUT). All values in microseconds.</div><div id="dwbody"></div></div>
     <div id="panels"></div>
     <div class="card" style="margin-bottom:16px">
       <h2>Latency statistics (microseconds)</h2>
@@ -85,13 +108,13 @@
 <script id="wsrc" type="text/plain">
 "use strict";
 var ML=[
- ["fast_NEW","NEW_REQUEST \u2192 EXCH_ORDER_REQUEST","Fast path"],
- ["fast_MODIFY","MODIFY_REQUEST \u2192 EXCH_MODIFY_REQUEST","Fast path"],
- ["fast_CANCEL","CANCEL_REQUEST \u2192 EXCH_CANCEL_REQUEST","Fast path"],
+ ["fast_NEW","NEW_REQUEST \u2192 EXCH_ORDER_REQUEST / R_IN \u2192 EX_SND","Fast path"],
+ ["fast_MODIFY","MODIFY_REQUEST \u2192 EXCH_MODIFY_REQUEST / R_IN \u2192 EX_SND","Fast path"],
+ ["fast_CANCEL","CANCEL_REQUEST \u2192 EXCH_CANCEL_REQUEST / R_IN \u2192 EX_SND","Fast path"],
  ["fast_ALL","All fast path (request \u2192 exchange request)","Fast path"],
- ["rtt_NEW","EXCH_ORDER_REQUEST \u2192 EXCH_ORDER_RESPONSE (PENDING)","Exchange round trip"],
- ["rtt_MODIFY","EXCH_MODIFY_REQUEST \u2192 EXCH_ORDER_RESPONSE (MODIFIED)","Exchange round trip"],
- ["rtt_CANCEL","EXCH_CANCEL_REQUEST \u2192 EXCH_ORDER_RESPONSE (CANCELLED)","Exchange round trip"]
+ ["rtt_NEW","EXCH_ORDER_REQUEST \u2192 EXCH_ORDER_RESPONSE (PENDING) / EX_SND \u2192 R_OUT","Exchange round trip"],
+ ["rtt_MODIFY","EXCH_MODIFY_REQUEST \u2192 EXCH_ORDER_RESPONSE (MODIFIED) / EX_SND \u2192 R_OUT","Exchange round trip"],
+ ["rtt_CANCEL","EXCH_CANCEL_REQUEST \u2192 EXCH_ORDER_RESPONSE (CANCELLED) / EX_SND \u2192 R_OUT","Exchange round trip"]
 ];
 var KEYIDX=[0,1,2,4,5,6];            /* event key 0..5 -> index in ML */
 var NEEDST=["PENDING","MODIFIED","CANCELLED"];
@@ -105,16 +128,19 @@ Grow.prototype.push=function(v){
   this.a[this.n++]=v;
 };
 
-var EQ,EK,ET,EN,ES;                   /* events: order idx, key, start ts (ns), latency (ns), status id */
+var EQ,EK,ET,EN,ES,EG;                   /* events: order idx, key, start ts (ns), latency (ns), status id */
 var Omap,Oqt,Ocl,Oex,Oac,Osec,Osd,Oqy,Opr,ON,OS;   /* orders */
 var Q,R,cmap,stArr,stMap,stRej,scanned,matched,ready=false;
-var Odl=[],curOff=0,curDi=0,curDl="",DM=[],dayLbl={};   /* per-date context */
+var Odl=[],curOff=0,curDi=0,curDl="",DM=[],dayLbl={};
+var curFmt=0,skipC={},dwRows=[],FMTN=["Type 1 (NEW_REQUEST / EXCH_* tags)","Type 2 (R_IN / EX_SND / R_OUT)"];
+var P=new Map(),curDms=null,lastDs="",lastExtra=0,skipN=0,skipL=[],SKIP_NS=5*3600e9;   /* skip a step if it is negative or longer than 5 h (clock / timezone mismatch) */
+function addSkip(id,why,d){skipN++;var gk=curDi*2+curFmt;skipC[gk]=(skipC[gk]||0)+1;if(skipL.length<500)skipL.push({id:id,why:why,d:d,dl:curDl})}   /* type-2 (R_IN/EX_SND/R_OUT) state */   /* per-date context */
 
 function reset(){
-  EQ=new Grow(Uint32Array);EK=new Grow(Uint8Array);ET=new Grow(Float64Array);EN=new Grow(Float64Array);ES=new Grow(Uint16Array);
+  EQ=new Grow(Uint32Array);EG=new Grow(Uint16Array);EK=new Grow(Uint8Array);ET=new Grow(Float64Array);EN=new Grow(Float64Array);ES=new Grow(Uint16Array);
   Omap=new Map();Odl=[];Oqt=[];Ocl=[];Oex=[];Oac=[];Osec=[];Osd=[];Oqy=[];Opr=[];
   ON=new Grow(Uint32Array,6144);OS=new Grow(Float64Array,6144);
-  Q=new Map();R=new Map();cmap=new Map();
+  Q=new Map();R=new Map();cmap=new Map();P=new Map();skipN=0;skipL=[];skipC={};dwRows=[];
   stArr=[""];stMap=new Map([["",0]]);stRej=[false];
   scanned=0;matched=0;ready=false;
 }
@@ -124,7 +150,7 @@ function sid(s){
   return i;
 }
 function getOrder(qt){
-  var key=curDi+"\u0001"+qt,i=Omap.get(key);
+  var key=curDi+"\u0001"+curFmt+"\u0001"+qt,i=Omap.get(key);
   if(i===undefined){
     i=Oqt.length;Omap.set(key,i);Oqt.push(qt);Odl.push(curDl);Ocl.push("");Oex.push("");Oac.push("");Osec.push("");Osd.push("");Oqy.push("");Opr.push("");
     for(var k=0;k<6;k++){ON.push(0);OS.push(0)}
@@ -134,7 +160,7 @@ function getOrder(qt){
 function rec(o,key,a,b,st){
   var d=b-a;
   ON.a[o*6+key]++;OS.a[o*6+key]+=d;
-  EQ.push(o);EK.push(key);ET.push(a);EN.push(d);ES.push(st?sid(st):0);
+  EQ.push(o);EG.push(curDi*2+curFmt);EK.push(key);ET.push(a);EN.push(d);ES.push(st?sid(st):0);
 }
 
 /* ---- fast text helpers (no regex on the hot path) ---- */
@@ -169,7 +195,13 @@ function tsBefore(line,i){
 }
 
 function handle(line){
-  scanned++;
+  scanned++;curFmt=0;
+  var c0=line.charCodeAt(0);
+  if(c0!==91&&(c0===9||c0===32||c0===76)){      /* tolerate editor "Find in files" prefixes: "<tab>Line 217115: [2026-..." */
+    var pm=/^\s*(?:Line\s*\d+\s*:\s*)?(?=\[\d{4}-\d{2}-\d{2} )/.exec(line);
+    if(pm&&pm[0].length)line=line.substring(pm[0].length);
+  }
+  if(line.charCodeAt(0)===91&&line.charCodeAt(5)===45&&line.charCodeAt(11)===32){handle2(line);return}
   var i=line.indexOf("[");
   while(i>=0){
     var j=line.indexOf("]",i+1);if(j<0)return;
@@ -182,6 +214,63 @@ function handle(line){
       return;
     }
     i=line.indexOf("[",j+1);
+  }
+}
+
+/* ---- type 2: [YYYY-MM-DD HH:MM:SS.uuuuuu][INFO][R_IN | EX_SND | R_OUT] ..., matched on ClOrdID (FIX tag 11) ----
+   fast path = R_IN -> EX_SND ; exchange latency = EX_SND -> R_OUT (first R_OUT per ClOrdID) */
+var ST39={"0":"NEW","1":"PARTIAL_FILL","2":"FILLED","4":"CANCELLED","5":"MODIFIED","6":"PENDING_CANCEL","8":"REJECTED","A":"PENDING_NEW","E":"PENDING_MODIFY"};
+function fx(m,tag){                      /* FIX tag value; delimiter is SOH (0x01) or | */
+  var k="\u0001"+tag+"=",d="\u0001",p=m.indexOf(k);
+  if(p<0){k="|"+tag+"=";d="|";p=m.indexOf(k)}
+  if(p<0)return "";
+  var s=p+k.length,e=m.indexOf(d,s);
+  return (e<0?m.substring(s):m.substring(s,e)).trim();
+}
+function cidOf(m,chk){                   /* ClOrdID (tag 11); falls back to heuristics if delimiters were stripped */
+  var v=fx(m,"11");if(v)return v;
+  var a=/11=(\d+?)(?=14=|15=|21=|22=|37=|38=|40=|41=|44=|48=|54=|55=)/.exec(m);
+  if(a&&(!chk||P.has(curDi+"\u0001"+a[1])))return a[1];
+  var b=/11=(\d+)/.exec(m);if(!b)return "";
+  if(chk)for(var n=b[1].length;n>=3;n--)if(P.has(curDi+"\u0001"+b[1].substring(0,n)))return b[1].substring(0,n);
+  return a?a[1]:b[1];
+}
+function handle2(line){
+  curFmt=1;
+  var i1=line.indexOf("]"),i2=line.indexOf("]",i1+1),i3=line.indexOf("]",i2+1);
+  if(i3<0)return;
+  var tag=line.substring(i2+2,i3),k=tag==="R_IN"?0:tag==="EX_SND"?1:tag==="R_OUT"?2:-1;
+  if(k<0)return;
+  var ds=line.substring(1,11);
+  if(ds!==lastDs){lastDs=ds;lastExtra=curDms==null?0:(Date.UTC(+ds.substring(0,4),+ds.substring(5,7)-1,+ds.substring(8,10))-curDms)/864e5*864e11}
+  function d2(i){return (line.charCodeAt(i)-48)*10+line.charCodeAt(i+1)-48}
+  var fr=0,fd=0,p,t,m=line.substring(i3+1),e,o,x,mt,cid,ty,key;
+  for(p=21;p<i1&&fd<9;p++){fr=fr*10+line.charCodeAt(p)-48;fd++}
+  while(fd<9){fr*=10;fd++}
+  t=(d2(12)*3600+d2(15)*60+d2(18))*1e9+fr+curOff+lastExtra;
+  if(k===0){                                           /* R_IN: request received */
+    cid=cidOf(m,false);if(!cid)return;
+    mt=fx(m,"35")||(/35=([A-Z0-9])/.exec(m)||[])[1]||"";
+    ty=mt==="D"?0:mt==="G"?1:mt==="F"?2:-1;if(ty<0)return;
+    o=getOrder(cid);matched++;
+    if(!Ocl[o])Ocl[o]=cid;
+    x=fx(m,"1");if(x)Oac[o]=x;
+    x=fx(m,"48")||fx(m,"55");if(x)Osec[o]=x;
+    x=fx(m,"54");if(x)Osd[o]=x;
+    x=fx(m,"38");if(x)Oqy[o]=x;
+    x=fx(m,"44");if(x)Opr[o]=x;
+    P.set(curDi+"\u0001"+cid,[o,ty,t,-1]);
+  }else if(k===1){                                     /* EX_SND: CSV, ClOrdID is one of the comma fields */
+    var tk=m.split(","),j;
+    for(j=0;j<tk.length;j++){key=curDi+"\u0001"+tk[j].trim();e=P.get(key);if(e&&e[3]<0){var dd=t-e[2];if(dd<0||dd>SKIP_NS){P.delete(key);addSkip(tk[j].trim(),"EX_SND "+(dd<0?"before R_IN":"more than 5 h after R_IN"),dd)}else{e[3]=t;matched++;rec(e[0],e[1],e[2],t,"")}break}}   /* EX_SND earlier than R_IN = clock/timezone crash: skip order */
+  }else{                                               /* R_OUT: response to client */
+    cid=cidOf(m,true);if(!cid)return;
+    key=curDi+"\u0001"+cid;e=P.get(key);if(!e)return;
+    P.delete(key);if(e[3]<0)return;
+    var d3=t-e[3];if(d3<0||d3>SKIP_NS){addSkip(cid,"R_OUT "+(d3<0?"before EX_SND":"more than 5 h after EX_SND"),d3);return}                         /* R_OUT earlier than EX_SND: skip exchange latency */
+    mt=fx(m,"35")||(/35=([A-Z0-9])/.exec(m)||[])[1]||"";
+    x=fx(m,"39")||(/39=([0-9A-Z])/.exec(m)||[])[1]||"";
+    rec(e[0],3+e[1],e[3],t,(mt==="3"||mt==="j")?"REJECTED":(ST39[x]||("39="+x)));
   }
 }
 
@@ -253,7 +342,7 @@ async function run(items,dm){
   var total=0,done=0,last=0,start=performance.now(),fi,i;
   for(i=0;i<items.length;i++)total+=items[i].blob.size;
   for(fi=0;fi<items.length;fi++){
-    var it=items[fi];curOff=it.off||0;curDi=it.di||0;curDl=it.dl||"";
+    var it=items[fi];curOff=it.off||0;curDi=it.di||0;curDl=it.dl||"";curDms=it.dms==null?null:it.dms;lastDs="";
     var gz=/\.gz$/i.test(it.name)&&typeof DecompressionStream!=="undefined",stream=it.blob.stream();
     if(gz)stream=stream.pipeThrough(new DecompressionStream("gzip"));
     var rd=stream.getReader(),dec=new TextDecoder("utf-8"),carry="",fb=0,pos,nl,end,txt;
@@ -284,6 +373,21 @@ async function run(items,dm){
   finish(performance.now()-start);
 }
 
+/* ---- date-wise analysis: one group per (date, log format) ; cats 0-2 fast N/M/C, 3-5 exch N/M/C, 6 fast ALL, 7 exch ALL ---- */
+function dwCompute(){
+  var N=EQ.n,ng=Math.max(DM.length,1)*2,cat=8,i,k,g,c,kk,cnt,pos,arr=[],rows=[];
+  for(i=0;i<N;i++)if(EG.a[i]>=ng)ng=EG.a[i]+1;
+  cnt=new Uint32Array(ng*cat);pos=new Uint32Array(ng*cat);
+  for(i=0;i<N;i++){g=EG.a[i];k=EK.a[i];cnt[g*cat+k]++;cnt[g*cat+(k<3?6:7)]++}
+  for(i=0;i<cnt.length;i++)arr.push(cnt[i]?new Float64Array(cnt[i]):null);
+  for(i=0;i<N;i++){g=EG.a[i];k=EK.a[i];c=EN.a[i];arr[g*cat+k][pos[g*cat+k]++]=c;kk=g*cat+(k<3?6:7);arr[kk][pos[kk]++]=c}
+  for(g=0;g<ng;g++){
+    var any=false,cs=[],a;
+    for(k=0;k<cat;k++){a=arr[g*cat+k];if(a){a.sort();cs.push(calc(a));any=true}else cs.push(null)}
+    if(any||skipC[g])rows.push({g:g,lbl:DM[g>>1]?DM[g>>1].l:"",fmt:g&1,cats:cs,skipped:skipC[g]||0});
+  }
+  return rows;
+}
 function finish(ms){
   var N=EQ.n,cnt=[0,0,0,0,0,0],pos=[0,0,0,0,0,0],i,k,arr=[],stats={};
   for(i=0;i<N;i++)cnt[EK.a[i]]++;
@@ -293,10 +397,10 @@ function finish(ms){
   for(k=0;k<3;k++){all.set(arr[k],o);o+=cnt[k]}
   for(k=0;k<6;k++){arr[k].sort();stats[ML[KEYIDX[k]][0]]=calc(arr[k])}
   all.sort();stats.fast_ALL=calc(all);
-  Q.clear();R.clear();cmap.clear();
-  statsCache=stats;
+  Q.clear();R.clear();cmap.clear();P.clear();
+  statsCache=stats;dwRows=dwCompute();
   ready=true;
-  postMessage({type:"done",ml:ML,stats:stats,orders:Oqt.length,scanned:scanned,matched:matched,events:N,ms:ms,dmap:DM});
+  postMessage({type:"done",ml:ML,stats:stats,orders:Oqt.length,scanned:scanned,matched:matched,events:N,ms:ms,dmap:DM,skipped:skipN,skipList:skipL,dw:dwRows});
 }
 
 /* ---- per-order table (paged/filtered here, only 500 rows cross to the UI) ---- */
@@ -463,6 +567,10 @@ async function excel(){
       return [Oqt[EQ.a[e]],ML[KEYIDX[EK.a[e]]][1],fmtT(t),fmtT(t+ns),ns,r3(ns),stArr[ES.a[e]]];
     })});
   }
+  var TN=["NEW","MODIFY","CANCEL"],dwr=[];
+  dwRows.forEach(function(r){[["Internal (fast path)",[0,1,2,6]],["Exchange (round trip)",[3,4,5,7]]].forEach(function(sc){sc[1].forEach(function(k){
+    var s=r.cats[k];if(s)dwr.push([r.lbl,FMTN[r.fmt],sc[0],k>5?"ALL":TN[k%3],s.n,r3(s.avg),r3(s.min),r3(s.max),r3(s.p50),r3(s.p90),r3(s.p99),r3(s.a90),r3(s.a99),r.skipped])})})});
+  sheets.push({name:"Date-wise",res:await buildSheet(["Date","Log format","Section","Type","Count","Avg (us)","Min (us)","Max (us)","P50 (us)","P90 (us)","P99 (us)","Avg <=P90 (us)","Avg <=P99 (us)","Skipped orders (date+format)"],dwr.length,function(r){return dwr[r]})});
   var files=[],ct="<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/><Override PartName=\"/xl/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml\"/>";
   var wb="<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheets>";
   var rel="<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">";
@@ -535,20 +643,26 @@ function newWorker(){
 function fail(t){
   killWorker();busy=false;setBusy(false);
   $("msg").textContent=t;$("res").style.display="none";
-  $("xls").disabled=$("exb").disabled=$("inb").disabled=true;state=null;
+  $("dwb").disabled=$("xls").disabled=$("exb").disabled=$("inb").disabled=true;state=null;
 }
 function setBusy(b){
   busy=b;
   $("go").disabled=b;$("smp").disabled=b;
   $("prog").style.display=b?"block":"none";
-  if(b){$("bar").style.width="0";$("inb").disabled=$("exb").disabled=$("xls").disabled=true}
+  if(b){$("bar").style.width="0";$("dwb").disabled=$("inb").disabled=$("exb").disabled=$("xls").disabled=true}
 }
 
 /* ---------- date detection / selection ---------- */
 var DRE=/OMS instance startup initiated on\s*:\s*(\d{1,2})-([A-Za-z]{3})-(\d{4})/,
  MON={JAN:0,FEB:1,MAR:2,APR:3,MAY:4,JUN:5,JUL:6,AUG:7,SEP:8,OCT:9,NOV:10,DEC:11};
-function parseDate(t){var m=DRE.exec(t);if(!m)return null;var mo=MON[m[2].toUpperCase()];if(mo==null)return null;var d=+m[1],y=+m[3];
-  return {key:y+"-"+p2(mo+1)+"-"+p2(d),ms:Date.UTC(y,mo,d),lbl:p2(d)+"-"+m[2].toUpperCase()+"-"+y}}
+var TS2=/\[(\d{4})-(\d{2})-(\d{2}) \d{2}:\d{2}:\d{2}/,MN=["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"];
+function mkDate(y,mo,d){return {key:y+"-"+p2(mo+1)+"-"+p2(d),ms:Date.UTC(y,mo,d),lbl:p2(d)+"-"+MN[mo]+"-"+y}}
+function parseDate(t){            /* type 1: startup line ; type 2: first [YYYY-MM-DD HH:MM:SS timestamp */
+  var m=DRE.exec(t),mo;
+  if(m){mo=MON[m[2].toUpperCase()];if(mo!=null)return mkDate(+m[3],mo,+m[1])}
+  m=TS2.exec(t);
+  return m?mkDate(+m[1],+m[2]-1,+m[3]):null;
+}
 async function scanFile(f){
   var LIM=4194304;
   if(!(/\.gz$/i.test(f.name)&&typeof DecompressionStream!=="undefined"))return parseDate(await f.slice(0,LIM).text());
@@ -588,14 +702,14 @@ async function run(){
   gs.forEach(function(x,di){
     var off=(x.ms!=null?(x.ms-min)/864e5:gap+1)*864e11;
     dm.push({n:Math.round(off/864e11),l:x.lbl});
-    list.forEach(function(f){var m=meta.get(fkey(f)),k=m&&m.d?m.d.key:"none";if(k===x.key)items.push({name:f.name,blob:f,off:off,di:di,dl:x.lbl})});
-    if(t.trim()&&(pasteD?pasteD.key:"none")===x.key)items.push({name:"pasted text",blob:new Blob([t]),off:off,di:di,dl:x.lbl});
+    list.forEach(function(f){var m=meta.get(fkey(f)),k=m&&m.d?m.d.key:"none";if(k===x.key)items.push({name:f.name,blob:f,off:off,di:di,dl:x.lbl,dms:x.ms})});
+    if(t.trim()&&(pasteD?pasteD.key:"none")===x.key)items.push({name:"pasted text",blob:new Blob([t]),off:off,di:di,dl:x.lbl,dms:x.ms});
   });
   if(!items.length){$("msg").textContent="Nothing to process for the selected dates.";return}
   killWorker();
   try{W=newWorker()}catch(e){fail("Could not start a background worker ("+e.message+"). Open the page over http://localhost or from a normal browser tab.");return}
   state=null;$("res").style.display="none";
-  PANELS.forEach(function(p){$("p_"+p.id).style.display="none";p.data=null});
+  PANELS.forEach(function(p){$("p_"+p.id).style.display="none";p.data=null});$("pdw").style.display="none";
   $("msg").textContent="";setBusy(true);
   $("ptxt").textContent="Starting...";
   W.postMessage({cmd:"analyze",items:items,dmap:dm});
@@ -614,8 +728,8 @@ function onMsg(e){
     m.dmap.forEach(function(d){dayLbl[d.n]=(Object.keys(yrs).length>1||d.l.charAt(0)==="(")?d.l:d.l.slice(0,6)});
     busy=false;setBusy(false);
     render();
-    $("xls").disabled=$("exb").disabled=$("inb").disabled=false;
-    $("msg").textContent="Done: "+fmtN(m.scanned)+" lines scanned, "+fmtN(m.orders)+" orders, "+fmtN(m.events)+" measurements across "+m.dmap.length+" date"+(m.dmap.length>1?"s":"")+" in "+(m.ms/1000).toFixed(1)+" s.";
+    $("dwb").disabled=$("xls").disabled=$("exb").disabled=$("inb").disabled=false;
+    $("msg").textContent="Done: "+fmtN(m.scanned)+" lines scanned, "+fmtN(m.orders)+" orders, "+fmtN(m.events)+" measurements across "+m.dmap.length+" date"+(m.dmap.length>1?"s":"")+" in "+(m.ms/1000).toFixed(1)+" s."+(m.skipped?" Skipped "+fmtN(m.skipped)+" order(s) with a negative or >5 h step time (timestamp mismatch) - see the Skipped orders table.":"")+(m.orders?"":" No orders matched: each line needs its own timestamp, e.g. [2026-11-16 12:10:05.853393][INFO][R_IN] ... (or HH:MM:SS.nnnnnnnnn [TAG] for the other format).");
     requestOrders("");
   }else if(m.type==="orders"){
     if(m.id===oseq)renderOrders(m);
@@ -667,7 +781,10 @@ function render(){
   var r=state,k=$("kpis"),fa=r.stats.fast_ALL;
   function kp(v,l){return '<div class="card kpi"><div class="v">'+v+'</div><div class="l">'+l+'</div></div>'}
   k.innerHTML=kp(fmtN(r.orders),"Unique QT orders")+kp(fmtN(r.scanned),"Log lines scanned")+kp(fmtN(r.events),"Latency measurements")+
-    kp(fa?us(fa.avg)+" \u00b5s":"-","Avg fast-path latency")+kp(fa?us(fa.p99)+" \u00b5s":"-","P99 fast-path latency");
+    kp(fa?us(fa.avg)+" \u00b5s":"-","Avg fast-path latency")+kp(fa?us(fa.p99)+" \u00b5s":"-","P99 fast-path latency")+(r.skipped?kp(fmtN(r.skipped),"Skipped (time mismatch)"):"");
+  var sl=r.skipList||[];$("skcard").style.display=sl.length?"block":"none";
+  if(sl.length){$("skn").textContent=fmtN(r.skipped)+(r.skipped>sl.length?" (first "+sl.length+" shown)":"");
+    $("skt").innerHTML="<thead><tr><th>ClOrdID</th><th>Date</th><th>Reason</th><th>Time difference</th></tr></thead><tbody>"+sl.map(function(x){return "<tr><td>"+esc(x.id)+"</td><td>"+esc(x.dl)+"</td><td>"+esc(x.why)+"</td><td>"+gapTxt(x.d)+"</td></tr>"}).join("")+"</tbody>"}
   var h="<thead><tr><th>Metric</th>"+COLS.map(function(c){return "<th>"+c+"</th>"}).join("")+"</tr></thead><tbody>",g="";
   r.ml.forEach(function(m){
     if(m[2]!==g){g=m[2];h+='<tr class="grp"><td colspan="10">'+g+'</td></tr>'}
@@ -677,6 +794,7 @@ function render(){
   $("st").innerHTML=h+"</tbody>";
   $("res").style.display="block";
 }
+function gapTxt(ns){var a=Math.abs(ns),sg=ns<0?"-":"+";return sg+(a>=36e11?(a/36e11).toFixed(2)+" h":a>=6e10?(a/6e10).toFixed(1)+" min":a>=1e9?(a/1e9).toFixed(2)+" s":(a/1e3).toFixed(1)+" \u00b5s")}
 function requestOrders(q){oseq++;W&&W.postMessage({cmd:"orders",q:q,id:oseq})}
 function renderOrders(m){
   var h="<thead><tr><th>QT_OrderID</th>"+(multi?"<th>Date</th>":"")+"<th>Security</th><th>Side</th><th>Qty</th><th>Price</th>"+OHEAD.map(function(x){return "<th>"+x+"</th>"}).join("")+"</tr></thead><tbody>";
@@ -849,11 +967,55 @@ function drawPanel(p){
 }
 function showPanel(id){
   if(!state)return;
-  PANELS.forEach(function(p){$("p_"+p.id).style.display=p.id===id?"block":"none"});
+  PANELS.forEach(function(p){$("p_"+p.id).style.display=p.id===id?"block":"none"});$("pdw").style.display="none";
   var p=PANELS.filter(function(q){return q.id===id})[0];
   renderPanel(p);$("p_"+id).scrollIntoView({behavior:"smooth",block:"start"});
 }
 mkPanels();
+/* ---------- date-wise analysis ---------- */
+var DWFN=["Type 1 \u00b7 OMS tags (NEW_REQUEST / EXCH_*)","Type 2 \u00b7 R_IN / EX_SND / R_OUT"],
+    DWTN=["NEW","MODIFY","CANCEL"];
+function dwBar(v,mx,col){var w=mx>0?Math.max(2,v/mx*100):0;return ' style="background:linear-gradient(90deg,'+col+' '+w.toFixed(1)+'%,transparent '+w.toFixed(1)+'%)"'}
+function renderDW(){
+  var rows=state.dw||[],b=$("dwbody"),h="",fmtGroups={};
+  if(!rows.length){b.innerHTML='<div class="note">No measurements to show.</div>';return}
+  /* overview: one line per date + format */
+  h+="<h3>Overview &mdash; all order types</h3><div class='tw'><table><thead><tr><th>Date</th><th>Log format</th><th>Samples</th><th>Internal avg</th><th>Internal P90</th><th>Internal P99</th><th>Internal max</th><th>Exch avg</th><th>Exch P90</th><th>Exch P99</th><th>Exch max</th><th>Skipped</th></tr></thead><tbody>";
+  var mi=0,me=0;rows.forEach(function(r){if(r.cats[6]&&r.cats[6].p99>mi)mi=r.cats[6].p99;if(r.cats[7]&&r.cats[7].p99>me)me=r.cats[7].p99});
+  rows.forEach(function(r){
+    var f=r.cats[6],e=r.cats[7];
+    function c(s,k,mx){return s?"<td class='num'>"+us(s[k])+"</td>":"<td class='na'>-</td>"}
+    h+="<tr><td><b>"+esc(r.lbl)+"</b></td><td>"+DWFN[r.fmt]+"</td><td class='num'>"+fmtN((f?f.n:0)+(e?e.n:0))+"</td>"+
+      c(f,"avg")+c(f,"p90")+(f?"<td class='num'"+dwBar(f.p99,mi,"rgba(34,211,238,.35)")+">"+us(f.p99)+"</td>":"<td class='na'>-</td>")+c(f,"max")+
+      c(e,"avg")+c(e,"p90")+(e?"<td class='num'"+dwBar(e.p99,me,"rgba(251,146,60,.35)")+">"+us(e.p99)+"</td>":"<td class='na'>-</td>")+c(e,"max")+
+      "<td class='num'>"+(r.skipped?fmtN(r.skipped):"-")+"</td></tr>";
+  });
+  h+="</tbody></table></div>";
+  /* detail tables */
+  [["Internal analysis (fast path)","Type 1: NEW / MODIFY / CANCEL_REQUEST \u2192 EXCH_*_REQUEST &nbsp;&middot;&nbsp; Type 2: R_IN \u2192 EX_SND",[0,1,2,6]],
+   ["Exchange analysis (round trip)","Type 1: EXCH_*_REQUEST \u2192 EXCH_ORDER_RESPONSE &nbsp;&middot;&nbsp; Type 2: EX_SND \u2192 R_OUT",[3,4,5,7]]].forEach(function(sc){
+    var mx=0,mp=0;
+    rows.forEach(function(r){sc[2].forEach(function(k){var s=r.cats[k];if(s){if(s.avg>mx)mx=s.avg;if(s.p99>mp)mp=s.p99}})});
+    h+="<h3>"+sc[0]+"</h3><div class='sub2'>"+sc[1]+"</div><div class='tw'><table><thead><tr><th>Type</th>"+["Count","Average","Min","Max","P50","P90","P99","Avg \u2264P90","Avg \u2264P99"].map(function(x){return "<th>"+x+"</th>"}).join("")+"</tr></thead><tbody>";
+    rows.forEach(function(r){
+      h+="<tr class='grp'><td colspan='10'>"+esc(r.lbl)+" &middot; "+DWFN[r.fmt]+(r.skipped?" &middot; "+fmtN(r.skipped)+" skipped":"")+"</td></tr>";
+      sc[2].forEach(function(k){
+        var s=r.cats[k],nm=k>5?"ALL":DWTN[k%3];
+        if(!s){h+="<tr><td>"+nm+"</td><td class='na' colspan='9'>no data</td></tr>";return}
+        h+="<tr"+(k>5?" class='all'":"")+"><td>"+nm+"</td><td class='num'>"+fmtN(s.n)+"</td><td class='num'"+dwBar(s.avg,mx,"rgba(124,131,255,.30)")+">"+us(s.avg)+"</td><td class='num'>"+us(s.min)+"</td><td class='num'>"+us(s.max)+"</td><td class='num'>"+us(s.p50)+"</td><td class='num'>"+us(s.p90)+"</td><td class='num'"+dwBar(s.p99,mp,"rgba(244,63,94,.28)")+">"+us(s.p99)+"</td><td class='num'>"+us(s.a90)+"</td><td class='num'>"+us(s.a99)+"</td></tr>";
+      });
+    });
+    h+="</tbody></table></div>";
+  });
+  b.innerHTML=h;
+}
+function showDW(){
+  if(!state)return;
+  PANELS.forEach(function(p){$("p_"+p.id).style.display="none"});
+  renderDW();$("pdw").style.display="block";$("pdw").scrollIntoView({behavior:"smooth",block:"start"});
+}
+$("dwb").onclick=showDW;
+
 
 /* ---------- UI wiring ---------- */
 var drop=$("drop");
@@ -872,13 +1034,29 @@ $("q").oninput=function(e){var v=e.target.value.trim();clearTimeout(ot);ot=setTi
 $("clr").onclick=function(){
   killWorker();setBusy(false);files=[];meta.clear();sel={};pasteD=null;renderFiles();
   $("txt").value="";$("res").style.display="none";
-  PANELS.forEach(function(p){$("p_"+p.id).style.display="none";p.data=null});
-  $("xls").disabled=$("exb").disabled=$("inb").disabled=true;$("msg").textContent="";state=null;
+  PANELS.forEach(function(p){$("p_"+p.id).style.display="none";p.data=null});$("pdw").style.display="none";
+  $("dwb").disabled=$("xls").disabled=$("exb").disabled=$("inb").disabled=true;$("msg").textContent="";state=null;
   renderDates();
 };
+function makeSample(){            /* synthetic type-2 log (R_IN / EX_SND / R_OUT) for 16-NOV-2026 */
+  var out=[],id=330000000,t=12*3600+10,S="\u0001",seed=12345;
+  function rnd(){seed=(seed*16807)%2147483647;return seed/2147483647}
+  function ts(sec){var s=Math.floor(sec),u=Math.round((sec-s)*1e6);if(u>=1e6){s++;u-=1e6}return "[2026-11-16 "+p2(Math.floor(s/3600))+":"+p2(Math.floor(s%3600/60))+":"+p2(s%60)+"."+("00000"+u).slice(-6)+"][INFO]"}
+  for(var i=0;i<1500;i++){
+    t+=0.02+rnd()*0.06+(i%300===0?2:0);
+    var ty=i%11===10?"F":i%7===6?"G":"D",cid=String(++id),
+        fast=(6+rnd()*20+(rnd()<.03?150+rnd()*400:0))/1e6,
+        ex=(120+rnd()*250+(rnd()<.02?1500+rnd()*3000:0)+(i>600&&i<700?400:0))/1e6,
+        rej=rnd()<.02,st=rej?"8":ty==="F"?"4":ty==="G"?"5":"0";
+    out.push(ts(t)+"[R_IN] 8=FIX.4.2"+S+"9=297"+S+"35="+ty+S+"34=0"+S+"49=43830"+S+"1=47352"+S+"11="+cid+S+"14=130"+S+"38=75"+S+"44=95.5"+S+"48=45403"+S+"54="+(i%2?"1":"2")+S+"55=NIFTY"+S+"10=000"+S);
+    out.push(ts(t+fast)+"[EX_SND] 20040,43830,84,45403,1200000130359820.000000,47352     ,1,1,0,0,650,650,130,9555,0,1479298205,1479298205,1,43830,13302OGLOBE0000093,79,GLOBE0000093,1,"+cid+",222222222222000.000000,AAJCE8528M,111306,0,1479298205858131548,");
+    out.push(ts(t+fast+ex)+"[R_OUT] 8=FIX4.2"+S+"9=300"+S+"35="+(rej&&ty==="F"?"9":"8")+S+"49=12345"+S+"11="+cid+S+"14=130"+S+"39="+st+S+"10=000"+S);
+  }
+  return out.join("\n");
+}
 $("smp").onclick=function(){
   files=[];meta.clear();renderFiles();
-  $("txt").value=["paste here"].join("\n");
+  $("txt").value=makeSample();
   pasteD=parseDate($("txt").value);renderDates();
   run();
 };
