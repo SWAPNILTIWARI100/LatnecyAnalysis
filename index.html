@@ -1020,18 +1020,6 @@ $("clr").onclick=function(){
 };
 function makeSample(){            /* synthetic type-2 log (R_IN / EX_SND / R_OUT) for 16-NOV-2026 */
   var out=[],id=330000000,t=12*3600+10,S="\u0001",seed=12345;
-  function rnd(){seed=(seed*16807)%2147483647;return seed/2147483647}
-  function ts(sec){var s=Math.floor(sec),u=Math.round((sec-s)*1e6);if(u>=1e6){s++;u-=1e6}return "[2026-11-16 "+p2(Math.floor(s/3600))+":"+p2(Math.floor(s%3600/60))+":"+p2(s%60)+"."+("00000"+u).slice(-6)+"][INFO]"}
-  for(var i=0;i<1500;i++){
-    t+=0.02+rnd()*0.06+(i%300===0?2:0);
-    var ty=i%11===10?"F":i%7===6?"G":"D",cid=String(++id),
-        fast=(6+rnd()*20+(rnd()<.03?150+rnd()*400:0))/1e6,
-        ex=(120+rnd()*250+(rnd()<.02?1500+rnd()*3000:0)+(i>600&&i<700?400:0))/1e6,
-        rej=rnd()<.02,st=rej?"8":ty==="F"?"4":ty==="G"?"5":"0";
-    out.push(ts(t)+"[R_IN] 8=FIX.4.2"+S+"9=297"+S+"35="+ty+S+"34=0"+S+"49=43830"+S+"1=47352"+S+"11="+cid+S+"14=130"+S+"38=75"+S+"44=95.5"+S+"48=45403"+S+"54="+(i%2?"1":"2")+S+"55=NIFTY"+S+"10=000"+S);
-    out.push(ts(t+fast)+"[EX_SND] 20040,43830,84,45403,1200000130359820.000000,47352     ,1,1,0,0,650,650,130,9555,0,1479298205,1479298205,1,43830,13302OGLOBE0000093,79,GLOBE0000093,1,"+cid+",222222222222000.000000,AAJCE8528M,111306,0,1479298205858131548,");
-    out.push(ts(t+fast+ex)+"[R_OUT] 8=FIX4.2"+S+"9=300"+S+"35="+(rej&&ty==="F"?"9":"8")+S+"49=12345"+S+"11="+cid+S+"14=130"+S+"39="+st+S+"10=000"+S);
-  }
   return out.join("\n");
 }
 $("smp").onclick=function(){
