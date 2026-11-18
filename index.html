@@ -12,13 +12,13 @@
 .lgbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--mut)}
 .lgbar button{padding:6px 12px;font-size:12px}
 .lgbar select{padding:5px 8px;font-size:12px}
-#lgt th[data-c]{cursor:pointer;user-select:none}
-#lgt th[data-c]:hover{color:var(--tx)}
-#lgt th.asc::after,table.srt th.asc::after{content:" \25B2";color:var(--ac2)}
-#lgt th.desc::after,table.srt th.desc::after{content:" \25BC";color:var(--ac2)}
+#lgt th[data-c],#rxt th[data-rxc]{cursor:pointer;user-select:none}
+#lgt th[data-c]:hover,#rxt th[data-rxc]:hover{color:var(--tx)}
+#lgt th.asc::after,#rxt th.asc::after,table.srt th.asc::after{content:" \25B2";color:var(--ac2)}
+#lgt th.desc::after,#rxt th.desc::after,table.srt th.desc::after{content:" \25BC";color:var(--ac2)}
 table.srt th{cursor:pointer;user-select:none}
-#lgt tr.flt th{top:35px;background:var(--bg2);padding:4px 6px;text-transform:none;letter-spacing:0;font-weight:400}
-#lgt tr.flt input,#lgt tr.flt select{width:100%;min-width:92px;padding:5px 7px;font-size:12px;border-radius:8px}
+#lgt tr.flt th,#rxt tr.flt th{top:35px;background:var(--bg2);padding:4px 6px;text-transform:none;letter-spacing:0;font-weight:400}
+#lgt tr.flt input,#lgt tr.flt select,#rxt tr.flt input{width:100%;min-width:92px;padding:5px 7px;font-size:12px;border-radius:8px}
 #pnote{display:flex;gap:10px;align-items:center;justify-content:space-between;margin-top:8px}
 #pnote button{padding:3px 10px;font-size:12px}
 td.sd-b{color:#22c55e;font-weight:600}
@@ -72,6 +72,7 @@ td.sd-a{color:var(--mut)}
     <button id="exb" disabled>Exch analysis</button>
     <button id="dwb" disabled>Date-wise analysis</button>
     <button id="lgb" disabled>Log analysis</button>
+    <button id="rxb" disabled>RX hardware timestamps</button>
     <button id="xls" disabled>Download Excel</button>
     <button id="smp">Load sample</button>
     <button id="clr">Clear</button>
@@ -86,6 +87,12 @@ td.sd-a{color:var(--mut)}
     <div class="kpis" id="kpis"></div>
     <div class="card" id="skcard" style="display:none;margin-bottom:16px"><div class="top"><h2 style="margin:0">Skipped orders <span class="dbadge" id="skn"></span></h2></div><div class="note">Skipped because the step time difference is negative or longer than 5 hours (log clocks / timezones out of sync, e.g. EX_SND logged 5:30 h away from R_IN). They are excluded from every statistic and graph.</div><div class="tw mx"><table class="srt" id="skt"></table></div></div>
     <div class="card" id="pdw" style="display:none;margin-bottom:16px"><div class="top"><h2 style="margin:0">Date-wise analysis</h2></div><div class="note">One block per log date. If a date has files in different log formats, each format is listed separately (Type 1 = NEW_REQUEST / EXCH_* tags, Type 2 = R_IN / EX_SND / R_OUT). Each row is split by Side (All / Buy / Sell). The side is taken from the NEW request and applied to every MODIFY / CANCEL of the same order (same ClOrdID / QT_OrderID). All values in microseconds.</div><div id="dwbody"></div></div>
+    <div class="card" id="prx" style="display:none;margin-bottom:16px">
+      <div class="top"><h2 style="margin:0">RX hardware timestamp analysis</h2>
+        <span class="lgbar"><span id="rx_info"></span><button id="rx_rst">Reset filters &amp; sort</button></span></div>
+      <div class="note">Each row pairs the latest RX_HW_TS with the next EXCH_ORDER_RESPONSE. Heartbeat lines are ignored. Conversion uses the most recent RX_CALIBRATION values: PHC = phc_ref + (RX_HW_TS - rx_ref) &times; scale. The difference is converted IST minus the RX_HW_TS log timestamp. Positive means the converted hardware time is later than the log timestamp. PHC must be UTC-synchronized for the absolute IST time to be valid.</div>
+      <div class="tw lgw"><table id="rxt"></table></div>
+    </div>
     <div class="card" id="plg" style="display:none;margin-bottom:16px">
       <div class="top"><h2 style="margin:0">Log analysis &mdash; every measurement</h2>
         <span class="lgbar"><button id="lg_prev">&lsaquo; Prev</button><span id="lg_info"></span><button id="lg_next">Next &rsaquo;</button>
@@ -138,6 +145,7 @@ var EQ,EK,ET,EN,ES,EG,EC,EY,Ost=[],clArr=[""],clMap=new Map(),stratArr=[""],stra
 var Omap,Oqt,Ocl,Oex,Oac,Osec,Osd,Oqy,Opr,ON,OS;   /* orders */
 var Q,R,cmap,stArr,stMap,stRej,scanned,matched,ready=false;
 var Odl=[],curOff=0,curDi=0,curDl="",DM=[],dayLbl={};
+var rxCalibration=null,rxPending=null,rxRows=[];
 var curFmt=0,skipC={},dwRows=[],FMTN=["Type 1 (NEW_REQUEST / EXCH_* tags)","Type 2 (R_IN / EX_SND / R_OUT)"];
 var P=new Map(),SM=new Map(),curDms=null,lastDs="",lastExtra=0,skipN=0,skipL=[],SKIP_NS=5*3600e9;   /* skip a step if it is negative or longer than 5 h (clock / timezone mismatch) */
 function addSkip(id,why,d){skipN++;var gk=curDi*2+curFmt;skipC[gk]=(skipC[gk]||0)+1;if(skipL.length<500)skipL.push({id:id,why:why,d:d,dl:curDl})}   /* type-2 (R_IN/EX_SND/R_OUT) state */   /* per-date context */
@@ -167,7 +175,7 @@ function reset(){
   ON=new Grow(Uint32Array,6144);OS=new Grow(Float64Array,6144);
   Q=new Map();R=new Map();cmap=new Map();P=new Map();SM=new Map();skipN=0;skipL=[];skipC={};dwRows=[];
   stArr=[""];stMap=new Map([["",0]]);stRej=[false];
-  scanned=0;matched=0;ready=false;
+  scanned=0;matched=0;ready=false;rxCalibration=null;rxPending=null;rxRows=[];
 }
 function sid(s){
   var i=stMap.get(s);
@@ -219,8 +227,57 @@ function tsBefore(line,i){
   return (h*3600+m*60+sec)*1e9+fr;
 }
 
+function rxIst(ns){
+  ns+=19800000000000n;
+  var sec=Number(ns/1000000000n),nano=Number(ns%1000000000n);
+  var d=new Date(sec*1000);
+  function z(v,n){return ("000000000"+v).slice(-n)}
+  return z(d.getUTCDate(),2)+"-"+["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"][d.getUTCMonth()]+"-"+d.getUTCFullYear()+" "+z(d.getUTCHours(),2)+":"+z(d.getUTCMinutes(),2)+":"+z(d.getUTCSeconds(),2)+"."+z(nano,9)+" IST";
+}
+function rxTimeOfDayDiff(converted,logNs){
+  var day=86400000000000n;
+  var hw=((converted+19800000000000n)%day+day)%day;
+  var log=BigInt(Math.round(logNs));
+  var diff=hw-log;
+  if(diff>day/2n)diff-=day;
+  else if(diff< -day/2n)diff+=day;
+  return diff.toString();
+}
+function rxLogEpoch(t){
+  if(curDms==null)return null;
+  var sec=Math.floor(t/1e9),nano=Math.round(t-sec*1e9);
+  return BigInt(curDms)*1000000n+BigInt(sec)*1000000000n+BigInt(nano)-19800000000000n;
+}
+function rxPair(r){
+  if(!rxPending||!rxCalibration)return;
+  var cid=getF(r,"ClOrdID"),exid=getF(r,"ExchOrderID")||getF(r,"ExchOrdID");
+  if(!cid)return;
+  try{
+    var cal=rxCalibration,raw=BigInt(rxPending.raw),ref=BigInt(cal.rx),phc=BigInt(cal.phc);
+    var scale=BigInt(cal.scaleFixed),converted=phc+((raw-ref)*scale)/1000000000000000n;
+    var logEpoch=rxLogEpoch(rxPending.logNs);
+    rxRows.push({
+      date:curDl,clordid:cid,exchorderid:exid,rxhw:rxPending.raw,
+      rxlog:rxPending.logText,rxist:rxIst(converted),
+      diff:logEpoch==null?rxTimeOfDayDiff(converted,rxPending.logNs):(converted-logEpoch).toString(),
+      phc:converted.toString(),rxref:cal.rx,phcref:cal.phc,scale:cal.scale
+    });
+  }catch(e){}
+  rxPending=null;
+}
 function handle(line){
   scanned++;curFmt=0;
+  var cm=/RX_CALIBRATION\s+rx_ref=(\d+)\s+phc_ref=(\d+)\s+scale=([0-9.]+)/.exec(line);
+  if(cm){
+    var sf=cm[3].split("."),frac=(sf[1]||"").slice(0,15);
+    rxCalibration={rx:cm[1],phc:cm[2],scale:cm[3],scaleFixed:BigInt(sf[0])*1000000000000000n+BigInt((frac+"000000000000000").slice(0,15))};
+  }
+  var ri=line.indexOf("RX_HW_TS=");
+  if(ri>=0){
+    var rawm=/RX_HW_TS=(\d+)/.exec(line),tm=/^(\d{2}):(\d{2}):(\d{2})\.(\d{1,9})/.exec(line),rxt=NaN;
+    if(tm){var ff=tm[4];while(ff.length<9)ff+="0";rxt=(+tm[1]*3600+ +tm[2]*60+ +tm[3])*1e9+ +ff;}
+    if(rawm&&rxt===rxt)rxPending={raw:rawm[1],logNs:rxt,logText:(function(){var q=Math.floor(rxt/1e9),n=Math.round(rxt-q*1e9);return p2(Math.floor(q/3600))+":"+p2(Math.floor(q%3600/60))+":"+p2(q%60)+"."+("00000000"+n).slice(-9)})()};
+  }
   var c0=line.charCodeAt(0);
   if(c0!==91&&(c0===9||c0===32||c0===76)){      /* tolerate editor "Find in files" prefixes: "<tab>Line 217115: [2026-..." */
     var pm=/^\s*(?:Line\s*\d+\s*:\s*)?(?=\[\d{4}-\d{2}-\d{2} )/.exec(line);
@@ -235,6 +292,7 @@ function handle(line){
       var tag=line.substring(i+1,j),c=TAGC.get(tag);
       if(c===undefined)c=TAGC.get(tag.toUpperCase());
       if(c===undefined)return;
+      if(c===6)rxPair(line.substring(j+1));
       proc(c,t+curOff,line.substring(j+1));
       return;
     }
@@ -450,7 +508,7 @@ function finish(ms){
   Q.clear();R.clear();cmap.clear();P.clear();SM.clear();
   statsCache=stats;dwRows=dwCompute();
   ready=true;
-  postMessage({type:"done",ml:ML,stats:stats,orders:Oqt.length,scanned:scanned,matched:matched,events:N,ms:ms,dmap:DM,skipped:skipN,skipList:skipL,dw:dwRows});
+  postMessage({type:"done",ml:ML,stats:stats,orders:Oqt.length,scanned:scanned,matched:matched,events:N,ms:ms,dmap:DM,skipped:skipN,skipList:skipL,dw:dwRows,rxRows:rxRows});
 }
 
 /* ---- per-order table (paged/filtered here, only 500 rows cross to the UI) ---- */
@@ -747,7 +805,7 @@ function newWorker(){
 function fail(t){
   killWorker();busy=false;setBusy(false);
   $("msg").textContent=t;$("res").style.display="none";
-  $("lgb").disabled=$("dwb").disabled=$("xls").disabled=$("exb").disabled=$("inb").disabled=true;state=null;
+  $("lgb").disabled=$("rxb").disabled=$("dwb").disabled=$("xls").disabled=$("exb").disabled=$("inb").disabled=true;state=null;
 }
 function setBusy(b){
   busy=b;
@@ -861,7 +919,7 @@ function onMsg(e){
     m.dmap.forEach(function(d){dayLbl[d.n]=(Object.keys(yrs).length>1||d.l.charAt(0)==="(")?d.l:d.l.slice(0,6)});
     busy=false;setBusy(false);
     render();
-    $("lgb").disabled=$("dwb").disabled=$("xls").disabled=$("exb").disabled=$("inb").disabled=false;
+    $("lgb").disabled=$("rxb").disabled=$("dwb").disabled=$("xls").disabled=$("exb").disabled=$("inb").disabled=false;
     $("msg").textContent="Done: "+fmtN(m.scanned)+" lines scanned, "+fmtN(m.orders)+" orders, "+fmtN(m.events)+" measurements across "+m.dmap.length+" date"+(m.dmap.length>1?"s":"")+" in "+(m.ms/1000).toFixed(1)+" s."+(m.skipped?" Skipped "+fmtN(m.skipped)+" order(s) with a negative or >5 h step time (timestamp mismatch) - see the Skipped orders table.":"")+(m.orders?"":" No orders matched: each line needs its own timestamp, e.g. [2026-11-16 12:10:05.853393][INFO][R_IN] ... (or HH:MM:SS.nnnnnnnnn [TAG] for the other format).");
     requestOrders("");
   }else if(m.type==="logq"){if(m.id===lg.seq)renderLog(m);
@@ -1111,7 +1169,7 @@ var LGC=[["date","Date","sel"],["start","Start time","txt"],["end","End time","t
   ["type","Type","sel",[["0","NEW"],["1","MODIFY"],["2","CANCEL"]]],["metric","Analysis","sel",[["in","Internal"],["ex","Exchange"]]],
   ["status","Status","txt"],["lat","Latency (\u00b5s)","txt"],["fmt","Log","sel",[["0","Type 1"],["1","Type 2"]]]],
   lg={s:null,f:{},page:0,ps:500,seq:0},lgT=0;
-function hideExtra(){$("pdw").style.display="none";$("plg").style.display="none"}
+function hideExtra(){$("pdw").style.display="none";$("plg").style.display="none";$("prx").style.display="none"}
 function mkLog(){
   var h="<thead><tr>",h2="<tr class='flt'>";
   LGC.forEach(function(c){
@@ -1177,6 +1235,51 @@ document.addEventListener("click",function(e){
   rows.sort(function(a,b){var x=val(a),y=val(b);if(typeof x==="number"&&typeof y==="number")return (x-y)*dir;x=String(x);y=String(y);return (x<y?-1:x>y?1:0)*dir});
   rows.forEach(function(r){body.appendChild(r)});
 });
+/* ---------- RX hardware timestamp analysis ---------- */
+var rxSort={c:"date",d:1},rxFilters={};
+var RXCOLS=[
+ ["date","Date"],["clordid","ClOrdID"],["exchorderid","ExchOrderID"],
+ ["rxhw","RX_HW_TS"],["rxlog","Log timestamp"],["rxist","Converted IST"],
+ ["diff","Diff (ns)"],["diffus","Diff (us)"],["phc","Converted PHC ns"],
+ ["rxref","Calibration RX ref"],["phcref","Calibration PHC ref"],["scale","Scale"]
+];
+function rxVal(r,k){
+ if(k==="diffus")return r.diff===""? "":(Number(r.diff)/1000).toFixed(3);
+ return r[k]==null?"":String(r[k]);
+}
+function renderRX(){
+ var rows=(state&&state.rxRows)||[],filtered=rows.filter(function(r){
+   return RXCOLS.every(function(c){var f=(rxFilters[c[0]]||"").toLowerCase();return !f||rxVal(r,c[0]).toLowerCase().indexOf(f)>=0});
+ });
+ var k=rxSort.c,d=rxSort.d;
+ filtered.sort(function(a,b){
+   var x=rxVal(a,k),y=rxVal(b,k),nx=Number(x),ny=Number(y);
+   var numeric=x!==""&&y!==""&&isFinite(nx)&&isFinite(ny);
+   return (numeric?nx-ny:(x<y?-1:x>y?1:0))*d;
+ });
+ var h="<thead><tr>"+RXCOLS.map(function(c){return "<th data-rxc='"+c[0]+"' class='"+(rxSort.c===c[0]?(d>0?"asc":"desc"):"")+"'>"+c[1]+"</th>"}).join("")+"</tr><tr class='flt'>"+
+ RXCOLS.map(function(c){return "<th><input data-rxf='"+c[0]+"' value='"+esc(rxFilters[c[0]]||"")+"' placeholder='filter...'></th>"}).join("")+"</tr></thead><tbody>";
+ filtered.forEach(function(r){h+="<tr>"+RXCOLS.map(function(c){var v=c[0]==="diffus"?(r.diff===""?"":(Number(r.diff)/1000).toFixed(3)):rxVal(r,c[0]);return "<td>"+esc(v)+"</td>"}).join("")+"</tr>"});
+ h+="</tbody>";$("rxt").innerHTML=h;
+ $("rx_info").textContent=fmtN(filtered.length)+" of "+fmtN(rows.length)+" matched response(s)";
+}
+function showRX(){
+ if(!state)return;
+ PANELS.forEach(function(p){$("p_"+p.id).style.display="none"});
+ hideExtra();renderRX();$("prx").style.display="block";$("prx").scrollIntoView({behavior:"smooth",block:"start"});
+}
+$("rxb").onclick=showRX;
+$("rxt").addEventListener("click",function(e){
+ var th=e.target.closest&&e.target.closest("th[data-rxc]");if(!th)return;
+ var c=th.getAttribute("data-rxc");rxSort=(rxSort.c===c)?{c:c,d:-rxSort.d}:{c:c,d:1};renderRX();
+});
+$("rxt").addEventListener("input",function(e){
+ var k=e.target.getAttribute&&e.target.getAttribute("data-rxf");if(!k)return;
+ rxFilters[k]=e.target.value;renderRX();
+ var el=$("rxt").querySelector("[data-rxf='"+k+"']");if(el){el.focus();el.setSelectionRange(el.value.length,el.value.length)}
+});
+$("rx_rst").onclick=function(){rxFilters={};rxSort={c:"date",d:1};renderRX()};
+
 /* ---------- date-wise analysis ---------- */
 var DWFN=["Type 1 \u00b7 OMS tags (NEW_REQUEST / EXCH_*)","Type 2 \u00b7 R_IN / EX_SND / R_OUT"],
     DWTN=["NEW","MODIFY","CANCEL"];
@@ -1252,9 +1355,9 @@ window.addEventListener("resize",function(){clearTimeout(rz);rz=setTimeout(funct
 $("q").oninput=function(e){var v=e.target.value.trim();clearTimeout(ot);ot=setTimeout(function(){requestOrders(v)},200)};
 $("clr").onclick=function(){
   killWorker();setBusy(false);files=[];meta.clear();sel={};pasteD=null;renderFiles();
-  $("txt").value="";bigText="";pasteInfo();$("res").style.display="none";
+  $("txt").value="";bigText="";pasteInfo();$("res").style.display="none";$("prx").style.display="none";rxFilters={};
   PANELS.forEach(function(p){$("p_"+p.id).style.display="none";p.data=null});hideExtra();
-  $("lgb").disabled=$("dwb").disabled=$("xls").disabled=$("exb").disabled=$("inb").disabled=true;$("msg").textContent="";state=null;
+  $("lgb").disabled=$("rxb").disabled=$("dwb").disabled=$("xls").disabled=$("exb").disabled=$("inb").disabled=true;$("msg").textContent="";state=null;
   renderDates();
 };
 function makeSample(){            /* synthetic sample for 16-NOV-2026: Type 1 (OMS tags, with strategies) + Type 2 (R_IN / EX_SND / R_OUT) */
