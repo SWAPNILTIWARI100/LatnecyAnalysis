@@ -6,25 +6,47 @@
 <title>Order Latency Analyzer</title>
 <link rel="stylesheet" href="style.css">
 <script>try{var __t=localStorage.getItem("ola-theme");if(__t)document.documentElement.setAttribute("data-theme",__t)}catch(e){}</script>
+<style>
+#plg{border-top:3px solid var(--warn)}
+.lgw{max-height:640px;overflow:auto;margin-top:10px}
+.lgbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--mut)}
+.lgbar button{padding:6px 12px;font-size:12px}
+.lgbar select{padding:5px 8px;font-size:12px}
+#lgt th[data-c]{cursor:pointer;user-select:none}
+#lgt th[data-c]:hover{color:var(--tx)}
+#lgt th.asc::after,table.srt th.asc::after{content:" \25B2";color:var(--ac2)}
+#lgt th.desc::after,table.srt th.desc::after{content:" \25BC";color:var(--ac2)}
+table.srt th{cursor:pointer;user-select:none}
+#lgt tr.flt th{top:35px;background:var(--bg2);padding:4px 6px;text-transform:none;letter-spacing:0;font-weight:400}
+#lgt tr.flt input,#lgt tr.flt select{width:100%;min-width:92px;padding:5px 7px;font-size:12px;border-radius:8px}
+#pnote{display:flex;gap:10px;align-items:center;justify-content:space-between;margin-top:8px}
+#pnote button{padding:3px 10px;font-size:12px}
+td.sd-b{color:#22c55e;font-weight:600}
+td.sd-s{color:#f43f5e;font-weight:600}
+td.sd-a{color:var(--mut)}
+</style>
 </head>
 <body>
 <div class="wrap">
   <div class="hdr"><h1>Order Latency Analyzer</h1><button id="thm" class="ghost" title="Toggle light / dark theme" aria-label="Toggle theme">&#9680;</button></div>
-  <p class="sub">Paste gateway logs or add any number of files (.log / .txt / .gz). Two log formats are auto-detected line by line: (1) OMS logs with [NEW_REQUEST] / [EXCH_ORDER_REQUEST] / [EXCH_ORDER_RESPONSE] tags, and (2) gateway logs with [YYYY-MM-DD HH:MM:SS.uuuuuu][INFO][R_IN] / [EX_SND] / [R_OUT] lines, matched on ClOrdID (FIX tag 11). Each file's date is read from the "OMS instance startup initiated on : DD-MON-YYYY" line or from the first log timestamp, so you can pick which dates to analyze. Files are streamed and parsed in a background thread, so the page never freezes. Latencies are computed per QT_OrderID. Everything stays local in your browser.</p>
+  <p class="sub">Paste gateway logs or add any number of files (.log / .txt / .gz). Two log formats are auto-detected line by line: (1) OMS logs with [NEW_REQUEST] / [EXCH_ORDER_REQUEST] / [EXCH_ORDER_RESPONSE] tags, and (2) gateway logs with [YYYY-MM-DD HH:MM:SS.uuuuuu][INFO][R_IN] / [EX_SND] / [R_OUT] lines, matched on ClOrdID (FIX tag 11). Each file's date is read from a QT_OMS_Logs_YYYY-MM-DD folder name when present, otherwise from the OMS startup line or first log timestamp, so you can pick which dates to analyze. Files are streamed and parsed in a background thread, so the page never freezes. Latencies are computed per QT_OrderID. Everything stays local in your browser.</p>
 
   <div class="grid">
     <div class="card">
       <h2>Paste logs</h2>
       <textarea id="txt" spellcheck="false" placeholder="07:44:13.003382650  [INFO]  OMS instance startup initiated on : 16-NOV-2026&#10;11:16:05.627169695  [NEW_REQUEST]  FS03_1010, Agent: ..., QT_OrderID: 5363, ClOrdID: 5363, ...&#10;[2026-11-16 12:10:05.853393][INFO][R_IN] 8=FIX.4.2|...|35=G|...|11=330945296|..."></textarea>
+      <div class="note" id="pnote" style="display:none"></div>
     </div>
     <div class="card">
       <h2>Upload files</h2>
       <div class="drop" id="drop">
         <div style="font-size:30px">&#128194;</div>
-        <div><b>Click to choose</b> or drag &amp; drop log files</div>
+        <div><b>Choose files</b> or drag &amp; drop log files</div>
         <div id="fname" style="font-size:12px">.log / .txt / .gz &mdash; multiple files, any size</div>
       </div>
+      <div class="fbar" style="margin-top:8px"><button type="button" id="folderBtn">Choose folder</button><span class="note">Includes files in all nested subfolders.</span></div>
       <input type="file" id="file" multiple hidden>
+      <input type="file" id="folder" webkitdirectory directory multiple hidden>
       <div class="fbar">
         <label>Process order
           <select id="ord">
@@ -49,6 +71,7 @@
     <button id="inb" disabled>Internal analysis</button>
     <button id="exb" disabled>Exch analysis</button>
     <button id="dwb" disabled>Date-wise analysis</button>
+    <button id="lgb" disabled>Log analysis</button>
     <button id="xls" disabled>Download Excel</button>
     <button id="smp">Load sample</button>
     <button id="clr">Clear</button>
@@ -61,8 +84,16 @@
 
   <div id="res">
     <div class="kpis" id="kpis"></div>
-    <div class="card" id="skcard" style="display:none;margin-bottom:16px"><div class="top"><h2 style="margin:0">Skipped orders <span class="dbadge" id="skn"></span></h2></div><div class="note">Skipped because the step time difference is negative or longer than 5 hours (log clocks / timezones out of sync, e.g. EX_SND logged 5:30 h away from R_IN). They are excluded from every statistic and graph.</div><div class="tw mx"><table id="skt"></table></div></div>
-    <div class="card" id="pdw" style="display:none;margin-bottom:16px"><div class="top"><h2 style="margin:0">Date-wise analysis</h2></div><div class="note">One block per log date. If a date has files in different log formats, each format is listed separately (Type 1 = NEW_REQUEST / EXCH_* tags, Type 2 = R_IN / EX_SND / R_OUT). All values in microseconds.</div><div id="dwbody"></div></div>
+    <div class="card" id="skcard" style="display:none;margin-bottom:16px"><div class="top"><h2 style="margin:0">Skipped orders <span class="dbadge" id="skn"></span></h2></div><div class="note">Skipped because the step time difference is negative or longer than 5 hours (log clocks / timezones out of sync, e.g. EX_SND logged 5:30 h away from R_IN). They are excluded from every statistic and graph.</div><div class="tw mx"><table class="srt" id="skt"></table></div></div>
+    <div class="card" id="pdw" style="display:none;margin-bottom:16px"><div class="top"><h2 style="margin:0">Date-wise analysis</h2></div><div class="note">One block per log date. If a date has files in different log formats, each format is listed separately (Type 1 = NEW_REQUEST / EXCH_* tags, Type 2 = R_IN / EX_SND / R_OUT). Each row is split by Side (All / Buy / Sell). The side is taken from the NEW request and applied to every MODIFY / CANCEL of the same order (same ClOrdID / QT_OrderID). All values in microseconds.</div><div id="dwbody"></div></div>
+    <div class="card" id="plg" style="display:none;margin-bottom:16px">
+      <div class="top"><h2 style="margin:0">Log analysis &mdash; every measurement</h2>
+        <span class="lgbar"><button id="lg_prev">&lsaquo; Prev</button><span id="lg_info"></span><button id="lg_next">Next &rsaquo;</button>
+          <select id="lg_ps" title="Rows per page"><option value="100">100 / page</option><option value="500" selected>500 / page</option><option value="1000">1000 / page</option><option value="5000">5000 / page</option></select>
+          <button id="lg_rst">Reset sort &amp; filters</button></span></div>
+      <div class="note">One row per measurement: an order with 5 modifies shows 5 internal + 5 exchange rows. Click a header to sort (click again to reverse); type in the boxes under the headers to filter. Latency accepts <b>&gt;100</b>, <b>&lt;=50</b> or plain text; times match e.g. <b>12:10:05</b>. Strategy = the name after the tag, e.g. <b>[NEW_REQUEST]&nbsp; ManualOrder,</b> (Type 2 logs carry none). Order Side shows Buy / Sell from the original NEW request and is carried across MODIFY / CANCEL measurements.</div>
+      <div class="tw lgw"><table id="lgt"></table></div>
+    </div>
     <div id="panels"></div>
     <div class="card" style="margin-bottom:16px">
       <h2>Latency statistics (microseconds)</h2>
@@ -103,19 +134,38 @@ Grow.prototype.push=function(v){
   this.a[this.n++]=v;
 };
 
-var EQ,EK,ET,EN,ES,EG;                   /* events: order idx, key, start ts (ns), latency (ns), status id */
+var EQ,EK,ET,EN,ES,EG,EC,EY,Ost=[],clArr=[""],clMap=new Map(),stratArr=[""],stratMap=new Map(),lqKey="",lqIdx=null;                   /* events: order idx, key, start ts (ns), latency (ns), status id */
 var Omap,Oqt,Ocl,Oex,Oac,Osec,Osd,Oqy,Opr,ON,OS;   /* orders */
 var Q,R,cmap,stArr,stMap,stRej,scanned,matched,ready=false;
 var Odl=[],curOff=0,curDi=0,curDl="",DM=[],dayLbl={};
 var curFmt=0,skipC={},dwRows=[],FMTN=["Type 1 (NEW_REQUEST / EXCH_* tags)","Type 2 (R_IN / EX_SND / R_OUT)"];
-var P=new Map(),curDms=null,lastDs="",lastExtra=0,skipN=0,skipL=[],SKIP_NS=5*3600e9;   /* skip a step if it is negative or longer than 5 h (clock / timezone mismatch) */
+var P=new Map(),SM=new Map(),curDms=null,lastDs="",lastExtra=0,skipN=0,skipL=[],SKIP_NS=5*3600e9;   /* skip a step if it is negative or longer than 5 h (clock / timezone mismatch) */
 function addSkip(id,why,d){skipN++;var gk=curDi*2+curFmt;skipC[gk]=(skipC[gk]||0)+1;if(skipL.length<500)skipL.push({id:id,why:why,d:d,dl:curDl})}   /* type-2 (R_IN/EX_SND/R_OUT) state */   /* per-date context */
 
+/* side code: 1 = Buy, 2 = Sell, 0 = unknown. Accepts FIX tag 54 values (1/2/5/6) and BUY/SELL words */
+function sdc(s){
+  if(!s)return 0;
+  s=String(s).trim().toUpperCase();
+  if(s==="1"||s==="B"||s.indexOf("BUY")===0)return 1;
+  if(s==="2"||s==="5"||s==="6"||s==="S"||s.indexOf("SELL")===0||s.indexOf("SHORT")===0)return 2;
+  return 0;
+}
+function internCl(s){var i=clMap.get(s);if(i===undefined){i=clArr.length;clArr.push(s);clMap.set(s,i)}return i}
+function internStrat(s){var i=stratMap.get(s);if(i===undefined){i=stratArr.length;stratArr.push(s);stratMap.set(s,i)}return i}
+/* strategy = first comma-separated token right after the tag, e.g. "[NEW_REQUEST]  ManualOrder, ..." or "[CANCEL_REQUEST]  FS03_1001, FS03_1001, ..." */
+function stratOf(r){
+  var s=0,L=r.length,c;
+  while(s<L&&((c=r.charCodeAt(s))===32||c===9))s++;
+  var e=r.indexOf(",",s);if(e<0)e=r.length;
+  var v=r.substring(s,e).trim();
+  if(!v||v.indexOf(":")>=0)return 0;            /* "Key: value" is a field, not a strategy name */
+  return internStrat(v);
+}
 function reset(){
-  EQ=new Grow(Uint32Array);EG=new Grow(Uint16Array);EK=new Grow(Uint8Array);ET=new Grow(Float64Array);EN=new Grow(Float64Array);ES=new Grow(Uint16Array);
-  Omap=new Map();Odl=[];Oqt=[];Ocl=[];Oex=[];Oac=[];Osec=[];Osd=[];Oqy=[];Opr=[];
+  EQ=new Grow(Uint32Array);EC=new Grow(Uint32Array);EY=new Grow(Uint32Array);EG=new Grow(Uint16Array);EK=new Grow(Uint8Array);ET=new Grow(Float64Array);EN=new Grow(Float64Array);ES=new Grow(Uint16Array);
+  Omap=new Map();Odl=[];Ost=[];clArr=[""];clMap=new Map();stratArr=[""];stratMap=new Map();lqKey="";lqIdx=null;Oqt=[];Ocl=[];Oex=[];Oac=[];Osec=[];Osd=[];Oqy=[];Opr=[];
   ON=new Grow(Uint32Array,6144);OS=new Grow(Float64Array,6144);
-  Q=new Map();R=new Map();cmap=new Map();P=new Map();skipN=0;skipL=[];skipC={};dwRows=[];
+  Q=new Map();R=new Map();cmap=new Map();P=new Map();SM=new Map();skipN=0;skipL=[];skipC={};dwRows=[];
   stArr=[""];stMap=new Map([["",0]]);stRej=[false];
   scanned=0;matched=0;ready=false;
 }
@@ -127,15 +177,15 @@ function sid(s){
 function getOrder(qt){
   var key=curDi+"\u0001"+curFmt+"\u0001"+qt,i=Omap.get(key);
   if(i===undefined){
-    i=Oqt.length;Omap.set(key,i);Oqt.push(qt);Odl.push(curDl);Ocl.push("");Oex.push("");Oac.push("");Osec.push("");Osd.push("");Oqy.push("");Opr.push("");
+    i=Oqt.length;Omap.set(key,i);Oqt.push(qt);Odl.push(curDl);Ost.push("");Ocl.push("");Oex.push("");Oac.push("");Osec.push("");Osd.push("");Oqy.push("");Opr.push("");
     for(var k=0;k<6;k++){ON.push(0);OS.push(0)}
   }
   return i;
 }
-function rec(o,key,a,b,st){
+function rec(o,key,a,b,st,sg,cd){
   var d=b-a;
   ON.a[o*6+key]++;OS.a[o*6+key]+=d;
-  EQ.push(o);EG.push(curDi*2+curFmt);EK.push(key);ET.push(a);EN.push(d);ES.push(st?sid(st):0);
+  EQ.push(o);EC.push(cd|0);EY.push(sg|0);EG.push(curDi*2+curFmt);EK.push(key);ET.push(a);EN.push(d);ES.push(st?sid(st):0);
 }
 
 /* ---- fast text helpers (no regex on the hot path) ---- */
@@ -231,13 +281,15 @@ function handle2(line){
     if(!Ocl[o])Ocl[o]=cid;
     x=fx(m,"1");if(x)Oac[o]=x;
     x=fx(m,"48")||fx(m,"55");if(x)Osec[o]=x;
-    x=fx(m,"54");if(x)Osd[o]=x;
+    x=fx(m,"54");                                      /* Side is printed on NEW; MODIFY / CANCEL reuse the side of the same ClOrdID (or of OrigClOrdID, tag 41) */
+    if(!x){var ok=fx(m,"41");x=SM.get(curDi+"\u0001"+cid)||(ok&&SM.get(curDi+"\u0001"+ok))||""}
+    if(x){Osd[o]=x;SM.set(curDi+"\u0001"+cid,x)}
     x=fx(m,"38");if(x)Oqy[o]=x;
     x=fx(m,"44");if(x)Opr[o]=x;
-    P.set(curDi+"\u0001"+cid,[o,ty,t,-1]);
+    P.set(curDi+"\u0001"+cid,[o,ty,t,-1,internCl(cid)]);
   }else if(k===1){                                     /* EX_SND: CSV, ClOrdID is one of the comma fields */
     var tk=m.split(","),j;
-    for(j=0;j<tk.length;j++){key=curDi+"\u0001"+tk[j].trim();e=P.get(key);if(e&&e[3]<0){var dd=t-e[2];if(dd<0||dd>SKIP_NS){P.delete(key);addSkip(tk[j].trim(),"EX_SND "+(dd<0?"before R_IN":"more than 5 h after R_IN"),dd)}else{e[3]=t;matched++;rec(e[0],e[1],e[2],t,"")}break}}   /* EX_SND earlier than R_IN = clock/timezone crash: skip order */
+    for(j=0;j<tk.length;j++){key=curDi+"\u0001"+tk[j].trim();e=P.get(key);if(e&&e[3]<0){var dd=t-e[2];if(dd<0||dd>SKIP_NS){P.delete(key);addSkip(tk[j].trim(),"EX_SND "+(dd<0?"before R_IN":"more than 5 h after R_IN"),dd)}else{e[3]=t;matched++;rec(e[0],e[1],e[2],t,"",0,e[4])}break}}   /* EX_SND earlier than R_IN = clock/timezone crash: skip order */
   }else{                                               /* R_OUT: response to client */
     cid=cidOf(m,true);if(!cid)return;
     key=curDi+"\u0001"+cid;e=P.get(key);if(!e)return;
@@ -245,7 +297,7 @@ function handle2(line){
     var d3=t-e[3];if(d3<0||d3>SKIP_NS){addSkip(cid,"R_OUT "+(d3<0?"before EX_SND":"more than 5 h after EX_SND"),d3);return}                         /* R_OUT earlier than EX_SND: skip exchange latency */
     mt=fx(m,"35")||(/35=([A-Z0-9])/.exec(m)||[])[1]||"";
     x=fx(m,"39")||(/39=([0-9A-Z])/.exec(m)||[])[1]||"";
-    rec(e[0],3+e[1],e[3],t,(mt==="3"||mt==="j")?"REJECTED":(ST39[x]||("39="+x)));
+    rec(e[0],3+e[1],e[3],t,(mt==="3"||mt==="j")?"REJECTED":(ST39[x]||("39="+x)),0,e[4]);
   }
 }
 
@@ -260,17 +312,20 @@ function proc(c,t,r){
   if(cl&&!Ocl[o])Ocl[o]=cl;
   if(c!==0&&!Oex[o]){x=getF(r,"ExchOrderID")||getF(r,"ExchOrdID");if(x)Oex[o]=x}
 
+  var sg=0,cd=0;
   if(c<3){                                   /* NEW / MODIFY / CANCEL _REQUEST */
+    sg=stratOf(r);cd=internCl(cl||qt);
+    if(sg&&(c===0||!Ost[o]))Ost[o]=stratArr[sg];
     if(c===0){
       x=getF(r,"QT_Account");if(x)Oac[o]=x;
       x=getF(r,"SecurityID");if(x)Osec[o]=x;
       x=getF(r,"Side");if(x)Osd[o]=x;
       x=getF(r,"Quantity");if(x)Oqy[o]=x;
       x=getF(r,"Price");if(x)Opr[o]=x;
-    }
+    }else if(!Osd[o]){x=getF(r,"Side");if(x)Osd[o]=x}   /* MODIFY / CANCEL share the order (QT_OrderID) and so its side */
     var key=o*3+c;a=Q.get(key);
     if(!a){a=[];Q.set(key,a)}
-    a.push(t);
+    a.push(t,sg,cd);
   }else if(c<6){                             /* EXCH_*_REQUEST */
     var ty=c===4?1:c===5?2:0;
     if(c===3){
@@ -281,21 +336,23 @@ function proc(c,t,r){
       if(!Oqy[o]){x=getF(r,"Quantity");if(x)Oqy[o]=x}
       if(!Opr[o]){x=getF(r,"Price");if(x)Opr[o]=x}
     }
+    cd=internCl(cl||qt);
     var k2=o*3+ty;a=Q.get(k2);
-    if(a){var st=a.shift();if(!a.length)Q.delete(k2);rec(o,ty,st,t,"")}
+    if(a){var st=a[0];sg=a[1];cd=a[2];a.splice(0,3);if(!a.length)Q.delete(k2);rec(o,ty,st,t,"",sg,cd)}
+    else if(Ost[o])sg=internStrat(Ost[o]);
     a=R.get(o);if(!a){a=[];R.set(o,a)}
-    a.push(ty,t);
+    a.push(ty,t,sg,cd);
   }else{                                     /* EXCH_ORDER_RESPONSE */
     var stt=(getF(r,"ExecStatus")||getF(r,"Status")).toUpperCase(),mi=-1,rj=stt.indexOf("REJECT")>=0,rt=-1;
     if(rj)rt=stt.indexOf("MODIFY")>=0?1:stt.indexOf("CANCEL")>=0?2:0;
     a=R.get(o);
     if(a){
-      for(q=0;q<a.length;q+=2){
+      for(q=0;q<a.length;q+=4){
         var tt=a[q];
         if(rj?(rt===0&&tt===0):NEEDST[tt]===stt){mi=q;break}
       }
-      if(mi>=0){var ty3=a[mi],t0=a[mi+1];a.splice(mi,2);rec(o,3+ty3,t0,t,stt)}
-      else if(rj){for(q=0;q<a.length;q+=2){if(a[q]===rt){a.splice(q,2);break}}}
+      if(mi>=0){var ty3=a[mi],t0=a[mi+1],sg3=a[mi+2],cd3=a[mi+3];a.splice(mi,4);rec(o,3+ty3,t0,t,stt,sg3,cd3)}
+      else if(rj){for(q=0;q<a.length;q+=4){if(a[q]===rt){a.splice(q,4);break}}}
       if(!a.length)R.delete(o);
     }
   }
@@ -326,6 +383,7 @@ async function run(items,dm){
       if(r.done)break;
       if(!gz)fb+=r.value.length;
       txt=carry+dec.decode(r.value,{stream:true});
+      if(txt.length>65536&&txt.indexOf("\n")<0&&txt.indexOf("\r")>=0)txt=txt.replace(/\r/g,"\n");   /* old-Mac line endings */
       pos=0;
       while((nl=txt.indexOf("\n",pos))>=0){
         end=nl;if(end>pos&&txt.charCodeAt(end-1)===13)end--;
@@ -333,6 +391,7 @@ async function run(items,dm){
         pos=nl+1;
       }
       carry=pos<txt.length?txt.substring(pos):"";
+      if(carry.length>8388608){handle(carry);carry=""}   /* a "line" over 8 MB: never let carry grow quadratically */
       var now=performance.now();
       if(now-last>100){
         last=now;
@@ -348,18 +407,34 @@ async function run(items,dm){
   finish(performance.now()-start);
 }
 
-/* ---- date-wise analysis: one group per (date, log format) ; cats 0-2 fast N/M/C, 3-5 exch N/M/C, 6 fast ALL, 7 exch ALL ---- */
+/* ---- date-wise analysis: one group per (date, log format) ; cats 0-2 fast N/M/C, 3-5 exch N/M/C, 6 fast ALL, 7 exch ALL
+   computed three times: sd 0 = all sides, sd 1 = Buy only, sd 2 = Sell only (side of an event = side of its order) ---- */
 function dwCompute(){
-  var N=EQ.n,ng=Math.max(DM.length,1)*2,cat=8,i,k,g,c,kk,cnt,pos,arr=[],rows=[];
+  var N=EQ.n,ng=Math.max(DM.length,1)*2,cat=8,i,k,g,c,kk,cnt,pos,arr,rows=[],sd,S=[[],[],[]],NO=Oqt.length,osc=new Uint8Array(NO),o;
+  for(o=0;o<NO;o++)osc[o]=sdc(Osd[o]);
   for(i=0;i<N;i++)if(EG.a[i]>=ng)ng=EG.a[i]+1;
-  cnt=new Uint32Array(ng*cat);pos=new Uint32Array(ng*cat);
-  for(i=0;i<N;i++){g=EG.a[i];k=EK.a[i];cnt[g*cat+k]++;cnt[g*cat+(k<3?6:7)]++}
-  for(i=0;i<cnt.length;i++)arr.push(cnt[i]?new Float64Array(cnt[i]):null);
-  for(i=0;i<N;i++){g=EG.a[i];k=EK.a[i];c=EN.a[i];arr[g*cat+k][pos[g*cat+k]++]=c;kk=g*cat+(k<3?6:7);arr[kk][pos[kk]++]=c}
+  for(sd=0;sd<3;sd++){
+    cnt=new Uint32Array(ng*cat);pos=new Uint32Array(ng*cat);arr=[];
+    for(i=0;i<N;i++){
+      if(sd&&osc[EQ.a[i]]!==sd)continue;
+      g=EG.a[i];k=EK.a[i];cnt[g*cat+k]++;cnt[g*cat+(k<3?6:7)]++;
+    }
+    for(i=0;i<cnt.length;i++)arr.push(cnt[i]?new Float64Array(cnt[i]):null);
+    for(i=0;i<N;i++){
+      if(sd&&osc[EQ.a[i]]!==sd)continue;
+      g=EG.a[i];k=EK.a[i];c=EN.a[i];arr[g*cat+k][pos[g*cat+k]++]=c;kk=g*cat+(k<3?6:7);arr[kk][pos[kk]++]=c;
+    }
+    for(g=0;g<ng;g++){
+      var cs=[],a;
+      for(k=0;k<cat;k++){a=arr[g*cat+k];if(a){a.sort();cs.push(calc(a))}else cs.push(null)}
+      S[sd][g]=cs;
+    }
+    arr=null;
+  }
   for(g=0;g<ng;g++){
-    var any=false,cs=[],a;
-    for(k=0;k<cat;k++){a=arr[g*cat+k];if(a){a.sort();cs.push(calc(a));any=true}else cs.push(null)}
-    if(any||skipC[g])rows.push({g:g,lbl:DM[g>>1]?DM[g>>1].l:"",fmt:g&1,cats:cs,skipped:skipC[g]||0});
+    var any=false;
+    for(k=0;k<cat;k++)if(S[0][g][k])any=true;
+    if(any||skipC[g])rows.push({g:g,lbl:DM[g>>1]?DM[g>>1].l:"",fmt:g&1,cats:S[0][g],buy:S[1][g],sell:S[2][g],skipped:skipC[g]||0});
   }
   return rows;
 }
@@ -372,7 +447,7 @@ function finish(ms){
   for(k=0;k<3;k++){all.set(arr[k],o);o+=cnt[k]}
   for(k=0;k<6;k++){arr[k].sort();stats[ML[KEYIDX[k]][0]]=calc(arr[k])}
   all.sort();stats.fast_ALL=calc(all);
-  Q.clear();R.clear();cmap.clear();P.clear();
+  Q.clear();R.clear();cmap.clear();P.clear();SM.clear();
   statsCache=stats;dwRows=dwCompute();
   ready=true;
   postMessage({type:"done",ml:ML,stats:stats,orders:Oqt.length,scanned:scanned,matched:matched,events:N,ms:ms,dmap:DM,skipped:skipN,skipList:skipL,dw:dwRows});
@@ -388,10 +463,61 @@ function ordersQ(m){
     if(rows.length<500){
       var r=[Oqt[i],Osec[i],Osd[i],Oqy[i],Opr[i]];
       for(k=0;k<6;k++){var c=ON.a[i*6+k];r.push(c?OS.a[i*6+k]/c:null)}
-      r.push(Odl[i]);rows.push(r);
+      r.push(Odl[i]);r.push(Ost[i]);rows.push(r);
     }
   }
   postMessage({type:"orders",id:m.id,rows:rows,total:total,q:q});
+}
+
+/* ---- log analysis table: one row per measurement; filter + sort + page all happen here ---- */
+var LCMP={
+ start:function(a,b){return ET.a[a]-ET.a[b]},
+ end:function(a,b){return ET.a[a]+EN.a[a]-ET.a[b]-EN.a[b]},
+ lat:function(a,b){return EN.a[a]-EN.a[b]},
+ cl:function(a,b){var x=clArr[EC.a[a]],y=clArr[EC.a[b]],nx=+x,ny=+y;if(x!==""&&y!==""&&nx===nx&&ny===ny)return nx-ny;return x<y?-1:x>y?1:0},
+ strat:function(a,b){var x=stratArr[EY.a[a]],y=stratArr[EY.a[b]];return x<y?-1:x>y?1:0},
+ status:function(a,b){var x=stArr[ES.a[a]],y=stArr[ES.a[b]];return x<y?-1:x>y?1:0},
+ type:function(a,b){return EK.a[a]%3-EK.a[b]%3},
+ metric:function(a,b){return (EK.a[a]>2?1:0)-(EK.a[b]>2?1:0)},
+ date:function(a,b){return (EG.a[a]>>1)-(EG.a[b]>>1)},
+ fmt:function(a,b){return (EG.a[a]&1)-(EG.a[b]&1)},
+ side:function(a,b){return sdc(Osd[EQ.a[a]])-sdc(Osd[EQ.a[b]])}
+};
+function hms(ns){var s=Math.floor(ns/1e9),f=Math.round(ns-s*1e9),x=s-Math.floor(s/86400)*86400;return p2(Math.floor(x/3600))+":"+p2(Math.floor(x%3600/60))+":"+p2(x%60)+"."+("00000000"+f).slice(-9)}
+function logQ(m){
+  if(!ready)return;
+  var N=EQ.n,f=m.f||{},s=m.s||null,key=JSON.stringify([s,f]),i,idx,n=0;
+  if(key!==lqKey||!lqIdx){
+    var fd=f.date||"",ft=(f.type===""||f.type==null)?-1:+f.type,fm=f.metric||"",ff=(f.fmt===""||f.fmt==null)?-1:+f.fmt,
+        fc=(f.cl||"").trim().toLowerCase(),fs=(f.strat||"").trim().toLowerCase(),fst=(f.status||"").trim().toLowerCase(),fside=(f.side||"").trim(),
+        fa=(f.start||"").trim(),fe=(f.end||"").trim(),fl=null,
+        lm=/^\s*(>=|<=|>|<)\s*([0-9.]+)\s*$/.exec(f.lat||""),latTxt=(!lm&&f.lat)?String(f.lat).trim():"";
+    if(lm)fl={op:lm[1],v:+lm[2]*1000};
+    idx=new Uint32Array(N);
+    for(i=0;i<N;i++){
+      var k=EK.a[i],g=EG.a[i];
+      if(ft>=0&&k%3!==ft)continue;
+      if(fm&&(fm==="in")!==(k<3))continue;
+      if(ff>=0&&(g&1)!==ff)continue;
+      if(fside&&(sdc(Osd[EQ.a[i]])===1?"Buy":sdc(Osd[EQ.a[i]])===2?"Sell":"-")!==fside)continue;
+      if(fd&&(DM[g>>1]?DM[g>>1].l:"")!==fd)continue;
+      if(fl){var v=EN.a[i],ok;switch(fl.op){case">":ok=v>fl.v;break;case"<":ok=v<fl.v;break;case">=":ok=v>=fl.v;break;default:ok=v<=fl.v}if(!ok)continue}
+      if(latTxt&&(EN.a[i]/1000).toFixed(3).indexOf(latTxt)<0)continue;
+      if(fc&&clArr[EC.a[i]].toLowerCase().indexOf(fc)<0)continue;
+      if(fs&&stratArr[EY.a[i]].toLowerCase().indexOf(fs)<0)continue;
+      if(fst&&stArr[ES.a[i]].toLowerCase().indexOf(fst)<0)continue;
+      if(fa&&hms(ET.a[i]).indexOf(fa)<0)continue;
+      if(fe&&hms(ET.a[i]+EN.a[i]).indexOf(fe)<0)continue;
+      idx[n++]=i;
+    }
+    idx=idx.subarray(0,n);
+    if(s&&LCMP[s.c]){var cmp=LCMP[s.c],dir=s.d<0?-1:1;idx.sort(dir>0?cmp:function(a,b){return cmp(b,a)})}
+    lqKey=key;lqIdx=idx;
+  }
+  idx=lqIdx;n=idx.length;
+  var ps=Math.max(10,Math.min(5000,m.ps||500)),pages=Math.max(1,Math.ceil(n/ps)),pg=Math.min(Math.max(0,m.page|0),pages-1),rows=[],a0=pg*ps,a1=Math.min(n,a0+ps),j,e;
+  for(j=a0;j<a1;j++){e=idx[j];rows.push([DM[EG.a[e]>>1]?DM[EG.a[e]>>1].l:"",hms(ET.a[e]),hms(ET.a[e]+EN.a[e]),clArr[EC.a[e]],stratArr[EY.a[e]],Osd[EQ.a[e]]?(sdc(Osd[EQ.a[e]])===1?"Buy":sdc(Osd[EQ.a[e]])===2?"Sell":"-"):"-",TYP[EK.a[e]%3],EK.a[e]>2?"Exchange":"Internal",stArr[ES.a[e]],EN.a[e],(EG.a[e]&1)?"Type 2":"Type 1"])}
+  postMessage({type:"logq",id:m.id,rows:rows,total:n,all:N,page:pg,pages:pages,ps:ps,from:a0});
 }
 
 /* ---- analysis panel: all heavy lifting here, UI gets compact aggregates ---- */
@@ -516,7 +642,7 @@ async function excel(){
     return s?[m[1],s.n,r3(s.avg),r3(s.min),r3(s.max),r3(s.p50),r3(s.p90),r3(s.p99),r3(s.a90),r3(s.a99)]:[m[1],0];
   });
   sheets.push({name:"Summary",res:await buildSheet(["Metric","Count","Avg (us)","Min (us)","Max (us)","P50 (us)","P90 (us)","P99 (us)","Avg <=P90 (us)","Avg <=P99 (us)"],sumRows.length,function(r){return sumRows[r]})});
-  var oHead=["QT_OrderID","Date","ClOrdID","ExchOrderID","QT_Account","SecurityID","Side","Quantity","Price"];
+  var oHead=["QT_OrderID","Date","Strategy","ClOrdID","ExchOrderID","QT_Account","SecurityID","Side","Quantity","Price"];
   for(k=0;k<6;k++)oHead.push(ML[KEYIDX[k]][1]+" (us)");
   oHead.push("Modify count","Cancel count");
   var p;
@@ -528,24 +654,26 @@ async function excel(){
   for(i=1;i<sheets.length;i++){
     var sh=sheets[i];
     sh.res=await buildSheet(oHead,sh._c,function(r){
-      var o=sh._a+r,row=[Oqt[o],Odl[o],Ocl[o],Oex[o],Oac[o],Osec[o],Osd[o],Oqy[o]===""?"":+Oqy[o],Opr[o]===""?"":+Opr[o]],kk,c;
+      var o=sh._a+r,row=[Oqt[o],Odl[o],Ost[o],Ocl[o],Oex[o],Oac[o],Osec[o],Osd[o],Oqy[o]===""?"":+Oqy[o],Opr[o]===""?"":+Opr[o]],kk,c;
       for(kk=0;kk<6;kk++){c=ON.a[o*6+kk];row.push(c?r3(OS.a[o*6+kk]/c):"")}
       row.push(ON.a[o*6+1],ON.a[o*6+2]);
       return row;
     });
   }
-  var eHead=["QT_OrderID","Metric","Start time","End time","Latency (ns)","Latency (us)","Status"];
+  var eHead=["QT_OrderID","ClOrdID","Strategy","Metric","Start time","End time","Latency (ns)","Latency (us)","Status"];
   for(p=0;p<eParts;p++){
     var eo=p*MAXR,ec=Math.min(MAXR,eCap-eo);
     sheets.push({name:eParts>1?"Events "+(p+1):"Events",res:await buildSheet(eHead,ec,function(r){
       var e=eo+r,ns=EN.a[e],t=ET.a[e];
-      return [Oqt[EQ.a[e]],ML[KEYIDX[EK.a[e]]][1],fmtT(t),fmtT(t+ns),ns,r3(ns),stArr[ES.a[e]]];
+      return [Oqt[EQ.a[e]],clArr[EC.a[e]],stratArr[EY.a[e]],ML[KEYIDX[EK.a[e]]][1],fmtT(t),fmtT(t+ns),ns,r3(ns),stArr[ES.a[e]]];
     })});
   }
   var TN=["NEW","MODIFY","CANCEL"],dwr=[];
   dwRows.forEach(function(r){[["Internal (fast path)",[0,1,2,6]],["Exchange (round trip)",[3,4,5,7]]].forEach(function(sc){sc[1].forEach(function(k){
-    var s=r.cats[k];if(s)dwr.push([r.lbl,FMTN[r.fmt],sc[0],k>5?"ALL":TN[k%3],s.n,r3(s.avg),r3(s.min),r3(s.max),r3(s.p50),r3(s.p90),r3(s.p99),r3(s.a90),r3(s.a99),r.skipped])})})});
-  sheets.push({name:"Date-wise",res:await buildSheet(["Date","Log format","Section","Type","Count","Avg (us)","Min (us)","Max (us)","P50 (us)","P90 (us)","P99 (us)","Avg <=P90 (us)","Avg <=P99 (us)","Skipped orders (date+format)"],dwr.length,function(r){return dwr[r]})});
+    [["All",r.cats],["Buy",r.buy],["Sell",r.sell]].forEach(function(sd){
+      var s=sd[1]&&sd[1][k];if(s)dwr.push([r.lbl,FMTN[r.fmt],sc[0],k>5?"ALL":TN[k%3],sd[0],s.n,r3(s.avg),r3(s.min),r3(s.max),r3(s.p50),r3(s.p90),r3(s.p99),r3(s.a90),r3(s.a99),r.skipped]);
+    })})})});
+  sheets.push({name:"Date-wise",res:await buildSheet(["Date","Log format","Section","Type","Side","Count","Avg (us)","Min (us)","Max (us)","P50 (us)","P90 (us)","P99 (us)","Avg <=P90 (us)","Avg <=P99 (us)","Skipped orders (date+format)"],dwr.length,function(r){return dwr[r]})});
   var files=[],ct="<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/><Override PartName=\"/xl/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml\"/>";
   var wb="<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheets>";
   var rel="<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">";
@@ -577,6 +705,7 @@ onmessage=function(e){
     if(m.cmd==="analyze"){
       run(m.items,m.dmap).then(function(){},fail);
     }else if(m.cmd==="orders")ordersQ(m);
+    else if(m.cmd==="logq")logQ(m);
     else if(m.cmd==="panel")panel(m);
     else if(m.cmd==="excel")excel().catch(fail);
     else if(m.cmd==="stats")statsCache=m.stats;
@@ -618,13 +747,13 @@ function newWorker(){
 function fail(t){
   killWorker();busy=false;setBusy(false);
   $("msg").textContent=t;$("res").style.display="none";
-  $("dwb").disabled=$("xls").disabled=$("exb").disabled=$("inb").disabled=true;state=null;
+  $("lgb").disabled=$("dwb").disabled=$("xls").disabled=$("exb").disabled=$("inb").disabled=true;state=null;
 }
 function setBusy(b){
   busy=b;
   $("go").disabled=b;$("smp").disabled=b;
   $("prog").style.display=b?"block":"none";
-  if(b){$("bar").style.width="0";$("dwb").disabled=$("inb").disabled=$("exb").disabled=$("xls").disabled=true}
+  if(b){$("bar").style.width="0";$("lgb").disabled=$("dwb").disabled=$("inb").disabled=$("exb").disabled=$("xls").disabled=true}
 }
 
 /* ---------- date detection / selection ---------- */
@@ -638,8 +767,14 @@ function parseDate(t){            /* type 1: startup line ; type 2: first [YYYY-
   m=TS2.exec(t);
   return m?mkDate(+m[1],+m[2]-1,+m[3]):null;
 }
+function folderDate(f){
+  var path=f.webkitRelativePath||f.name,re=/QT_OMS_Logs_(\d{4})-(\d{2})-(\d{2})/ig,m,last=null;
+  while((m=re.exec(path))!==null)last=m;
+  return last?mkDate(+last[1],+last[2]-1,+last[3]):null;
+}
 async function scanFile(f){
-  var LIM=4194304;
+  var LIM=4194304,fd=folderDate(f);
+  if(fd)return fd;
   if(!(/\.gz$/i.test(f.name)&&typeof DecompressionStream!=="undefined"))return parseDate(await f.slice(0,LIM).text());
   var rd=f.stream().pipeThrough(new DecompressionStream("gzip")).getReader(),dec=new TextDecoder(),buf="",n=0,r,d;
   try{for(;;){r=await rd.read();if(r.done)break;n+=r.value.length;buf+=dec.decode(r.value,{stream:true});d=parseDate(buf);if(d)return d;if(n>LIM)break;buf=buf.slice(-200)}}catch(e){}
@@ -651,7 +786,7 @@ function groups(){
   var g={},list=[];
   function add(d,size){var k=d?d.key:"none";if(!g[k]){g[k]={key:k,ms:d?d.ms:null,lbl:d?d.lbl:"(no date)",n:0,bytes:0};list.push(g[k])}g[k].n++;g[k].bytes+=size}
   files.forEach(function(f){var m=meta.get(fkey(f));if(m&&m.ready)add(m.d,f.size)});
-  if($("txt").value.trim())add(pasteD,$("txt").value.length);
+  if(hasPaste())add(pasteD,pasteBytes());
   list.sort(function(a,b){return a.key==="none"?1:b.key==="none"?-1:a.key<b.key?-1:1});
   list.forEach(function(x){if(sel[x.key]===undefined)sel[x.key]=true});
   return list;
@@ -664,27 +799,50 @@ function renderDates(){
 $("dchips").onchange=function(e){var k=e.target.getAttribute("data-d");if(k){sel[k]=e.target.checked;renderDates()}};
 $("dall").onclick=function(){for(var k in sel)sel[k]=true;renderDates()};
 $("dnone").onclick=function(){for(var k in sel)sel[k]=false;renderDates()};
-$("txt").addEventListener("input",function(){clearTimeout(pasteT);pasteT=setTimeout(function(){pasteD=parseDate($("txt").value.slice(0,4194304));renderDates()},300)});
+/* pasted text: big pastes are kept OUT of the textarea (a huge textarea freezes the browser) */
+var bigText="";
+function hasPaste(){return bigText.length>0||/\S/.test($("txt").value)}
+function pasteBytes(){return bigText.length+$("txt").value.length}
+function getPaste(){var v=$("txt").value;return bigText?(v?bigText+"\n"+v:bigText):v}
+function pasteSample(){var v=$("txt").value;return (bigText?bigText.slice(0,262144)+"\n":"")+v.slice(0,262144)}
+function pasteInfo(){
+  var n=$("pnote");
+  if(!bigText){n.style.display="none";n.innerHTML="";return}
+  var c=1,p=-1;while((p=bigText.indexOf("\n",p+1))>=0)c++;
+  n.style.display="flex";
+  n.innerHTML='<span>Large paste kept outside the text box so the page stays responsive: <b>'+fmtSz(bigText.length)+'</b>, '+fmtN(c)+' lines.</span><button id="pclr">Remove</button>';
+  $("pclr").onclick=function(){bigText="";pasteInfo();pasteD=parseDate(pasteSample());renderDates()};
+}
+$("txt").addEventListener("paste",function(e){
+  var cd=e.clipboardData,t=cd&&cd.getData("text/plain");
+  if(!t||t.length<150000)return;                 /* small pastes behave normally */
+  e.preventDefault();
+  if(t.indexOf("\r")>=0)t=t.replace(/\r\n?/g,"\n");
+  bigText+=(bigText?"\n":"")+t;
+  pasteInfo();pasteD=parseDate(pasteSample());renderDates();
+});
+$("txt").addEventListener("input",function(){clearTimeout(pasteT);pasteT=setTimeout(function(){pasteD=parseDate(pasteSample());renderDates()},300)});
 
 async function run(){
   $("msg").textContent="Reading dates...";
+  await new Promise(function(r){setTimeout(r,30)});            /* let the browser paint before heavy work */
   await Promise.all(files.map(function(f){var m=meta.get(fkey(f));return m&&m.p}));
-  pasteD=parseDate($("txt").value.slice(0,4194304));
-  var gs=groups().filter(function(x){return sel[x.key]}),list=orderedFiles(),t=$("txt").value;
-  if(!gs.length){$("msg").textContent=(files.length||t.trim())?"Select at least one date.":"Paste logs or add files first.";return}
+  pasteD=parseDate(pasteSample());
+  var gs=groups().filter(function(x){return sel[x.key]}),list=orderedFiles(),t=hasPaste()?getPaste():"";
+  if(!gs.length){$("msg").textContent=(files.length||t)?"Select at least one date.":"Paste logs or add files first.";return}
   var dated=gs.filter(function(x){return x.ms!=null}),min=dated.length?dated[0].ms:0,
       gap=dated.length?(dated[dated.length-1].ms-min)/864e5:-1,items=[],dm=[];
   gs.forEach(function(x,di){
     var off=(x.ms!=null?(x.ms-min)/864e5:gap+1)*864e11;
     dm.push({n:Math.round(off/864e11),l:x.lbl});
     list.forEach(function(f){var m=meta.get(fkey(f)),k=m&&m.d?m.d.key:"none";if(k===x.key)items.push({name:f.name,blob:f,off:off,di:di,dl:x.lbl,dms:x.ms})});
-    if(t.trim()&&(pasteD?pasteD.key:"none")===x.key)items.push({name:"pasted text",blob:new Blob([t]),off:off,di:di,dl:x.lbl,dms:x.ms});
+    if(t&&(pasteD?pasteD.key:"none")===x.key)items.push({name:"pasted text",blob:new Blob([t]),off:off,di:di,dl:x.lbl,dms:x.ms});
   });
   if(!items.length){$("msg").textContent="Nothing to process for the selected dates.";return}
   killWorker();
   try{W=newWorker()}catch(e){fail("Could not start a background worker ("+e.message+"). Open the page over http://localhost or from a normal browser tab.");return}
   state=null;$("res").style.display="none";
-  PANELS.forEach(function(p){$("p_"+p.id).style.display="none";p.data=null});$("pdw").style.display="none";
+  PANELS.forEach(function(p){$("p_"+p.id).style.display="none";p.data=null});hideExtra();
   $("msg").textContent="";setBusy(true);
   $("ptxt").textContent="Starting...";
   W.postMessage({cmd:"analyze",items:items,dmap:dm});
@@ -703,9 +861,10 @@ function onMsg(e){
     m.dmap.forEach(function(d){dayLbl[d.n]=(Object.keys(yrs).length>1||d.l.charAt(0)==="(")?d.l:d.l.slice(0,6)});
     busy=false;setBusy(false);
     render();
-    $("dwb").disabled=$("xls").disabled=$("exb").disabled=$("inb").disabled=false;
+    $("lgb").disabled=$("dwb").disabled=$("xls").disabled=$("exb").disabled=$("inb").disabled=false;
     $("msg").textContent="Done: "+fmtN(m.scanned)+" lines scanned, "+fmtN(m.orders)+" orders, "+fmtN(m.events)+" measurements across "+m.dmap.length+" date"+(m.dmap.length>1?"s":"")+" in "+(m.ms/1000).toFixed(1)+" s."+(m.skipped?" Skipped "+fmtN(m.skipped)+" order(s) with a negative or >5 h step time (timestamp mismatch) - see the Skipped orders table.":"")+(m.orders?"":" No orders matched: each line needs its own timestamp, e.g. [2026-11-16 12:10:05.853393][INFO][R_IN] ... (or HH:MM:SS.nnnnnnnnn [TAG] for the other format).");
     requestOrders("");
+  }else if(m.type==="logq"){if(m.id===lg.seq)renderLog(m);
   }else if(m.type==="orders"){
     if(m.id===oseq)renderOrders(m);
   }else if(m.type==="panel"){
@@ -725,7 +884,7 @@ function onMsg(e){
 }
 
 /* ---------- file list ---------- */
-function fkey(f){return f.name+"|"+f.size+"|"+f.lastModified}
+function fkey(f){return (f.webkitRelativePath||f.name)+"|"+f.size+"|"+f.lastModified}
 function addFiles(fl){
   if(!fl||!fl.length)return;
   var have={};files.forEach(function(f){have[fkey(f)]=1});
@@ -741,7 +900,7 @@ function orderedFiles(){
 }
 function renderFiles(){
   var a=orderedFiles(),tot=0,h="";
-  a.forEach(function(f,i){tot+=f.size;h+='<div class="frow"><span class="n" title="'+esc(f.name)+'">'+(i+1)+". "+esc(f.name)+'</span><span class="s">'+dbadge(f)+fmtSz(f.size)+'</span><button data-k="'+esc(fkey(f))+'" title="Remove">&times;</button></div>'});
+  a.forEach(function(f,i){tot+=f.size;h+='<div class="frow"><span class="n" title="'+esc(f.webkitRelativePath||f.name)+'">'+(i+1)+". "+esc(f.webkitRelativePath||f.name)+'</span><span class="s">'+dbadge(f)+fmtSz(f.size)+'</span><button data-k="'+esc(fkey(f))+'" title="Remove">&times;</button></div>'});
   $("flist").innerHTML=h;
   $("ftot").textContent=a.length?a.length+" file"+(a.length>1?"s":"")+" \u00b7 "+fmtSz(tot):"";
 }
@@ -772,9 +931,9 @@ function render(){
 function gapTxt(ns){var a=Math.abs(ns),sg=ns<0?"-":"+";return sg+(a>=36e11?(a/36e11).toFixed(2)+" h":a>=6e10?(a/6e10).toFixed(1)+" min":a>=1e9?(a/1e9).toFixed(2)+" s":(a/1e3).toFixed(1)+" \u00b5s")}
 function requestOrders(q){oseq++;W&&W.postMessage({cmd:"orders",q:q,id:oseq})}
 function renderOrders(m){
-  var h="<thead><tr><th>QT_OrderID</th>"+(multi?"<th>Date</th>":"")+"<th>Security</th><th>Side</th><th>Qty</th><th>Price</th>"+OHEAD.map(function(x){return "<th>"+x+"</th>"}).join("")+"</tr></thead><tbody>";
+  var h="<thead><tr><th>QT_OrderID</th>"+(multi?"<th>Date</th>":"")+"<th>Strategy</th><th>Security</th><th>Side</th><th>Qty</th><th>Price</th>"+OHEAD.map(function(x){return "<th>"+x+"</th>"}).join("")+"</tr></thead><tbody>";
   m.rows.forEach(function(r){
-    h+="<tr><td>"+esc(r[0])+"</td>"+(multi?"<td>"+esc(r[11])+"</td>":"")+"<td>"+esc(r[1])+"</td><td>"+esc(r[2])+"</td><td>"+esc(r[3])+"</td><td>"+esc(r[4])+"</td>";
+    h+="<tr><td>"+esc(r[0])+"</td>"+(multi?"<td>"+esc(r[11])+"</td>":"")+"<td>"+esc(r[12]||"-")+"</td><td>"+esc(r[1])+"</td><td>"+esc(r[2])+"</td><td>"+esc(r[3])+"</td><td>"+esc(r[4])+"</td>";
     for(var i=5;i<11;i++)h+="<td>"+(r[i]==null?'<span class="na">-</span>':us(r[i]))+"</td>";
     h+="</tr>";
   });
@@ -886,7 +1045,7 @@ function mkPanels(){
       cbox(i+"_c2","Latency per time window",'bars = max, line = avg, red = highest-avg window <b id="w_'+i+'"></b>')+
       cbox(i+"_c3","Order count per time window",'same time axis as above &mdash; amber = busiest window')+
       '<div class="grid">'+cbox(i+"_c4","Latency distribution","red = tail above P99")+cbox(i+"_c5","Load vs latency",'each dot = one time window; dashed = trend')+'</div>'+
-      '<div class="grid"><div><h2>Top 10 largest latencies</h2><div class="tw"><table id="t_'+i+'"></table></div></div><div><h2>Highest-latency time windows</h2><div class="tw"><table id="h_'+i+'"></table></div></div></div></div>';
+      '<div class="grid"><div><h2>Top 10 largest latencies</h2><div class="tw"><table class="srt" id="t_'+i+'"></table></div></div><div><h2>Highest-latency time windows</h2><div class="tw"><table class="srt" id="h_'+i+'"></table></div></div></div></div>';
     $("panels").appendChild(d);
     $("a_"+i).onclick=function(){var a=parseT($("f_"+i).value,0),b=parseT($("u_"+i).value,1);if(a!==a||b!==b){$("g_"+i).textContent="Use HH:MM, HH:MM:SS or HH:MM:SS.mmm (optionally prefixed with a date, e.g. 17-NOV 09:30)";return}p.f=a;p.u=b;renderPanel(p)};
     $("r_"+i).onclick=function(){$("f_"+i).value="";$("u_"+i).value="";p.f=null;p.u=null;renderPanel(p)};
@@ -942,42 +1101,120 @@ function drawPanel(p){
 }
 function showPanel(id){
   if(!state)return;
-  PANELS.forEach(function(p){$("p_"+p.id).style.display=p.id===id?"block":"none"});$("pdw").style.display="none";
+  PANELS.forEach(function(p){$("p_"+p.id).style.display=p.id===id?"block":"none"});hideExtra();
   var p=PANELS.filter(function(q){return q.id===id})[0];
   renderPanel(p);$("p_"+id).scrollIntoView({behavior:"smooth",block:"start"});
 }
 mkPanels();
+/* ---------- log analysis (every measurement; worker-side sort / filter / paging) ---------- */
+var LGC=[["date","Date","sel"],["start","Start time","txt"],["end","End time","txt"],["cl","ClOrdID","txt"],["strat","Strategy","txt"],["side","Order Side","side"],
+  ["type","Type","sel",[["0","NEW"],["1","MODIFY"],["2","CANCEL"]]],["metric","Analysis","sel",[["in","Internal"],["ex","Exchange"]]],
+  ["status","Status","txt"],["lat","Latency (\u00b5s)","txt"],["fmt","Log","sel",[["0","Type 1"],["1","Type 2"]]]],
+  lg={s:null,f:{},page:0,ps:500,seq:0},lgT=0;
+function hideExtra(){$("pdw").style.display="none";$("plg").style.display="none"}
+function mkLog(){
+  var h="<thead><tr>",h2="<tr class='flt'>";
+  LGC.forEach(function(c){
+    h+="<th data-c='"+c[0]+"' title='Click to sort'>"+c[1]+"</th>";
+    h2+="<th>"+(c[2]==="sel"?"<select data-f='"+c[0]+"'><option value=''>All</option>"+(c[3]||[]).map(function(o){return "<option value='"+o[0]+"'>"+o[1]+"</option>"}).join("")+"</select>":c[2]==="side"?"<select data-f='side'><option value=''>All</option><option value='Buy'>Buy</option><option value='Sell'>Sell</option></select>":"<input data-f='"+c[0]+"' placeholder='"+(c[0]==="lat"?"&gt;100, &lt;=50":"filter...")+"'>")+"</th>";
+  });
+  $("lgt").innerHTML=h+"</tr>"+h2+"</tr></thead><tbody id='lgbody'></tbody>";
+}
+function lgMarks(){Array.prototype.forEach.call($("lgt").querySelectorAll("th[data-c]"),function(th){th.className=lg.s&&lg.s.c===th.getAttribute("data-c")?(lg.s.d>0?"asc":"desc"):""})}
+function requestLog(){
+  if(!W||!state)return;
+  lg.seq++;$("lg_info").textContent="Loading...";
+  W.postMessage({cmd:"logq",id:lg.seq,s:lg.s,f:lg.f,page:lg.page,ps:lg.ps});
+}
+function renderLog(m){
+  var h="";
+  m.rows.forEach(function(r){h+="<tr><td>"+esc(r[0])+"</td><td>"+r[1]+"</td><td>"+r[2]+"</td><td>"+esc(r[3])+"</td><td>"+esc(r[4]||"-")+"</td><td class='"+(r[5]==="Buy"?"sd-b":r[5]==="Sell"?"sd-s":"sd-a")+"'>"+r[5]+"</td><td>"+r[6]+"</td><td>"+r[7]+"</td><td>"+esc(r[8]||"-")+"</td><td>"+us(r[9])+"</td><td>"+r[10]+"</td></tr>"});
+  $("lgbody").innerHTML=h||"<tr><td colspan='11' class='na'>No rows match.</td></tr>";
+  lg.page=m.page;
+  $("lg_info").textContent=m.total?fmtN(m.from+1)+" - "+fmtN(m.from+m.rows.length)+" of "+fmtN(m.total)+(m.total<m.all?" (filtered from "+fmtN(m.all)+")":""):"0 of "+fmtN(m.all);
+  $("lg_prev").disabled=m.page<=0;$("lg_next").disabled=m.page>=m.pages-1;
+}
+function showLog(){
+  if(!state)return;
+  PANELS.forEach(function(p){$("p_"+p.id).style.display="none"});
+  hideExtra();
+  var ds=$("lgt").querySelector("select[data-f=date]"),cur=ds.value;
+  ds.innerHTML="<option value=''>All</option>"+state.dmap.map(function(d){return "<option value=\""+esc(d.l)+"\">"+esc(d.l)+"</option>"}).join("");
+  ds.value=cur;if(ds.value!==cur){ds.value="";delete lg.f.date}
+  $("plg").style.display="block";requestLog();
+  $("plg").scrollIntoView({behavior:"smooth",block:"start"});
+}
+mkLog();
+$("lgb").onclick=showLog;
+$("lgt").onclick=function(e){
+  var th=e.target.closest&&e.target.closest("th[data-c]");if(!th)return;
+  var c=th.getAttribute("data-c");
+  lg.s=(lg.s&&lg.s.c===c)?{c:c,d:-lg.s.d}:{c:c,d:1};
+  lg.page=0;lgMarks();requestLog();
+};
+function lgFilter(e){
+  var t=e.target,k=t.getAttribute&&t.getAttribute("data-f");if(!k)return;
+  lg.f[k]=t.value;lg.page=0;clearTimeout(lgT);lgT=setTimeout(requestLog,t.tagName==="SELECT"?0:250);
+}
+$("lgt").addEventListener("input",lgFilter);
+$("lgt").addEventListener("change",lgFilter);
+$("lg_prev").onclick=function(){if(lg.page>0){lg.page--;requestLog()}};
+$("lg_next").onclick=function(){lg.page++;requestLog()};
+$("lg_ps").onchange=function(){lg.ps=+$("lg_ps").value;lg.page=0;requestLog()};
+$("lg_rst").onclick=function(){
+  lg.s=null;lg.f={};lg.page=0;lgMarks();
+  Array.prototype.forEach.call($("lgt").querySelectorAll("[data-f]"),function(x){x.value=""});
+  requestLog();
+};
+/* click-to-sort for the small result tables (class "srt") */
+document.addEventListener("click",function(e){
+  var th=e.target.closest&&e.target.closest("table.srt th");if(!th)return;
+  var tb=th.closest("table"),idx=Array.prototype.indexOf.call(th.parentNode.children,th),dir=th.classList.contains("asc")?-1:1;
+  Array.prototype.forEach.call(tb.querySelectorAll("th"),function(x){x.classList.remove("asc","desc")});
+  th.classList.add(dir>0?"asc":"desc");
+  var body=tb.tBodies[0],rows=Array.prototype.slice.call(body.rows);
+  function val(r){var t=(r.cells[idx]?r.cells[idx].textContent:"").replace(/[,\s]/g,"").replace(/x$/,"");return /^[-+]?\d+(\.\d+)?$/.test(t)?parseFloat(t):t.toLowerCase()}
+  rows.sort(function(a,b){var x=val(a),y=val(b);if(typeof x==="number"&&typeof y==="number")return (x-y)*dir;x=String(x);y=String(y);return (x<y?-1:x>y?1:0)*dir});
+  rows.forEach(function(r){body.appendChild(r)});
+});
 /* ---------- date-wise analysis ---------- */
 var DWFN=["Type 1 \u00b7 OMS tags (NEW_REQUEST / EXCH_*)","Type 2 \u00b7 R_IN / EX_SND / R_OUT"],
     DWTN=["NEW","MODIFY","CANCEL"];
 function dwBar(v,mx,col){var w=mx>0?Math.max(2,v/mx*100):0;return ' style="background:linear-gradient(90deg,'+col+' '+w.toFixed(1)+'%,transparent '+w.toFixed(1)+'%)"'}
+function sdTd(n){return "<td class='"+(n==="Buy"?"sd-b":n==="Sell"?"sd-s":"sd-a")+"'>"+n+"</td>"}
 function renderDW(){
   var rows=state.dw||[],b=$("dwbody"),h="",fmtGroups={};
   if(!rows.length){b.innerHTML='<div class="note">No measurements to show.</div>';return}
-  /* overview: one line per date + format */
-  h+="<h3>Overview &mdash; all order types</h3><div class='tw'><table><thead><tr><th>Date</th><th>Log format</th><th>Samples</th><th>Internal avg</th><th>Internal P90</th><th>Internal P99</th><th>Internal max</th><th>Exch avg</th><th>Exch P90</th><th>Exch P99</th><th>Exch max</th><th>Skipped</th></tr></thead><tbody>";
-  var mi=0,me=0;rows.forEach(function(r){if(r.cats[6]&&r.cats[6].p99>mi)mi=r.cats[6].p99;if(r.cats[7]&&r.cats[7].p99>me)me=r.cats[7].p99});
+  /* overview: one block per date + format, rows = All / Buy / Sell */
+  h+="<h3>Overview &mdash; all order types</h3><div class='tw'><table><thead><tr><th>Date</th><th>Log format</th><th>Side</th><th>Samples</th><th>Internal avg</th><th>Internal P90</th><th>Internal P99</th><th>Internal max</th><th>Exch avg</th><th>Exch P90</th><th>Exch P99</th><th>Exch max</th><th>Skipped</th></tr></thead><tbody>";
+  var mi=0,me=0;rows.forEach(function(r){[r.cats,r.buy,r.sell].forEach(function(cs){if(cs&&cs[6]&&cs[6].p99>mi)mi=cs[6].p99;if(cs&&cs[7]&&cs[7].p99>me)me=cs[7].p99})});
   rows.forEach(function(r){
-    var f=r.cats[6],e=r.cats[7];
-    function c(s,k,mx){return s?"<td class='num'>"+us(s[k])+"</td>":"<td class='na'>-</td>"}
-    h+="<tr><td><b>"+esc(r.lbl)+"</b></td><td>"+DWFN[r.fmt]+"</td><td class='num'>"+fmtN((f?f.n:0)+(e?e.n:0))+"</td>"+
-      c(f,"avg")+c(f,"p90")+(f?"<td class='num'"+dwBar(f.p99,mi,"rgba(34,211,238,.35)")+">"+us(f.p99)+"</td>":"<td class='na'>-</td>")+c(f,"max")+
-      c(e,"avg")+c(e,"p90")+(e?"<td class='num'"+dwBar(e.p99,me,"rgba(251,146,60,.35)")+">"+us(e.p99)+"</td>":"<td class='na'>-</td>")+c(e,"max")+
-      "<td class='num'>"+(r.skipped?fmtN(r.skipped):"-")+"</td></tr>";
+    [["All",r.cats],["Buy",r.buy],["Sell",r.sell]].forEach(function(sd){
+      var cs=sd[1],f=cs&&cs[6],e=cs&&cs[7];
+      if(!f&&!e&&sd[0]!=="All")return;
+      function c(s,k){return s?"<td class='num'>"+us(s[k])+"</td>":"<td class='na'>-</td>"}
+      h+="<tr><td><b>"+esc(r.lbl)+"</b></td><td>"+DWFN[r.fmt]+"</td>"+sdTd(sd[0])+"<td class='num'>"+fmtN((f?f.n:0)+(e?e.n:0))+"</td>"+
+        c(f,"avg")+c(f,"p90")+(f?"<td class='num'"+dwBar(f.p99,mi,"rgba(34,211,238,.35)")+">"+us(f.p99)+"</td>":"<td class='na'>-</td>")+c(f,"max")+
+        c(e,"avg")+c(e,"p90")+(e?"<td class='num'"+dwBar(e.p99,me,"rgba(251,146,60,.35)")+">"+us(e.p99)+"</td>":"<td class='na'>-</td>")+c(e,"max")+
+        "<td class='num'>"+(sd[0]==="All"&&r.skipped?fmtN(r.skipped):"-")+"</td></tr>";
+    });
   });
   h+="</tbody></table></div>";
   /* detail tables */
   [["Internal analysis (fast path)","Type 1: NEW / MODIFY / CANCEL_REQUEST \u2192 EXCH_*_REQUEST &nbsp;&middot;&nbsp; Type 2: R_IN \u2192 EX_SND",[0,1,2,6]],
    ["Exchange analysis (round trip)","Type 1: EXCH_*_REQUEST \u2192 EXCH_ORDER_RESPONSE &nbsp;&middot;&nbsp; Type 2: EX_SND \u2192 R_OUT",[3,4,5,7]]].forEach(function(sc){
     var mx=0,mp=0;
-    rows.forEach(function(r){sc[2].forEach(function(k){var s=r.cats[k];if(s){if(s.avg>mx)mx=s.avg;if(s.p99>mp)mp=s.p99}})});
-    h+="<h3>"+sc[0]+"</h3><div class='sub2'>"+sc[1]+"</div><div class='tw'><table><thead><tr><th>Type</th>"+["Count","Average","Min","Max","P50","P90","P99","Avg \u2264P90","Avg \u2264P99"].map(function(x){return "<th>"+x+"</th>"}).join("")+"</tr></thead><tbody>";
+    rows.forEach(function(r){[r.cats,r.buy,r.sell].forEach(function(cs){sc[2].forEach(function(k){var s=cs&&cs[k];if(s){if(s.avg>mx)mx=s.avg;if(s.p99>mp)mp=s.p99}})})});
+    h+="<h3>"+sc[0]+"</h3><div class='sub2'>"+sc[1]+"</div><div class='tw'><table><thead><tr><th>Type</th><th>Side</th>"+["Count","Average","Min","Max","P50","P90","P99","Avg \u2264P90","Avg \u2264P99"].map(function(x){return "<th>"+x+"</th>"}).join("")+"</tr></thead><tbody>";
     rows.forEach(function(r){
-      h+="<tr class='grp'><td colspan='10'>"+esc(r.lbl)+" &middot; "+DWFN[r.fmt]+(r.skipped?" &middot; "+fmtN(r.skipped)+" skipped":"")+"</td></tr>";
+      h+="<tr class='grp'><td colspan='11'>"+esc(r.lbl)+" &middot; "+DWFN[r.fmt]+(r.skipped?" &middot; "+fmtN(r.skipped)+" skipped":"")+"</td></tr>";
       sc[2].forEach(function(k){
-        var s=r.cats[k],nm=k>5?"ALL":DWTN[k%3];
-        if(!s){h+="<tr><td>"+nm+"</td><td class='na' colspan='9'>no data</td></tr>";return}
-        h+="<tr"+(k>5?" class='all'":"")+"><td>"+nm+"</td><td class='num'>"+fmtN(s.n)+"</td><td class='num'"+dwBar(s.avg,mx,"rgba(124,131,255,.30)")+">"+us(s.avg)+"</td><td class='num'>"+us(s.min)+"</td><td class='num'>"+us(s.max)+"</td><td class='num'>"+us(s.p50)+"</td><td class='num'>"+us(s.p90)+"</td><td class='num'"+dwBar(s.p99,mp,"rgba(244,63,94,.28)")+">"+us(s.p99)+"</td><td class='num'>"+us(s.a90)+"</td><td class='num'>"+us(s.a99)+"</td></tr>";
+        var nm=k>5?"ALL":DWTN[k%3];
+        if(!r.cats[k]){h+="<tr><td>"+nm+"</td><td class='na'>-</td><td class='na' colspan='9'>no data</td></tr>";return}
+        [["All",r.cats],["Buy",r.buy],["Sell",r.sell]].forEach(function(sd){
+          var s=sd[1]&&sd[1][k];if(!s)return;
+          h+="<tr"+(k>5?" class='all'":"")+"><td>"+nm+"</td>"+sdTd(sd[0])+"<td class='num'>"+fmtN(s.n)+"</td><td class='num'"+dwBar(s.avg,mx,"rgba(124,131,255,.30)")+">"+us(s.avg)+"</td><td class='num'>"+us(s.min)+"</td><td class='num'>"+us(s.max)+"</td><td class='num'>"+us(s.p50)+"</td><td class='num'>"+us(s.p90)+"</td><td class='num'"+dwBar(s.p99,mp,"rgba(244,63,94,.28)")+">"+us(s.p99)+"</td><td class='num'>"+us(s.a90)+"</td><td class='num'>"+us(s.a99)+"</td></tr>";
+        });
       });
     });
     h+="</tbody></table></div>";
@@ -987,7 +1224,7 @@ function renderDW(){
 function showDW(){
   if(!state)return;
   PANELS.forEach(function(p){$("p_"+p.id).style.display="none"});
-  renderDW();$("pdw").style.display="block";$("pdw").scrollIntoView({behavior:"smooth",block:"start"});
+  hideExtra();renderDW();$("pdw").style.display="block";$("pdw").scrollIntoView({behavior:"smooth",block:"start"});
 }
 $("dwb").onclick=showDW;
 $("thm").onclick=function(){
@@ -1001,6 +1238,8 @@ $("thm").onclick=function(){
 var drop=$("drop");
 drop.onclick=function(){$("file").click()};
 $("file").onchange=function(e){addFiles(e.target.files);e.target.value=""};
+$("folderBtn").onclick=function(){$("folder").click()};
+$("folder").onchange=function(e){addFiles(e.target.files);e.target.value=""};
 ["dragenter","dragover"].forEach(function(n){drop.addEventListener(n,function(e){e.preventDefault();drop.classList.add("over")})});
 ["dragleave","drop"].forEach(function(n){drop.addEventListener(n,function(e){e.preventDefault();drop.classList.remove("over")})});
 drop.addEventListener("drop",function(e){addFiles(e.dataTransfer.files)});
@@ -1013,19 +1252,56 @@ window.addEventListener("resize",function(){clearTimeout(rz);rz=setTimeout(funct
 $("q").oninput=function(e){var v=e.target.value.trim();clearTimeout(ot);ot=setTimeout(function(){requestOrders(v)},200)};
 $("clr").onclick=function(){
   killWorker();setBusy(false);files=[];meta.clear();sel={};pasteD=null;renderFiles();
-  $("txt").value="";$("res").style.display="none";
-  PANELS.forEach(function(p){$("p_"+p.id).style.display="none";p.data=null});$("pdw").style.display="none";
-  $("dwb").disabled=$("xls").disabled=$("exb").disabled=$("inb").disabled=true;$("msg").textContent="";state=null;
+  $("txt").value="";bigText="";pasteInfo();$("res").style.display="none";
+  PANELS.forEach(function(p){$("p_"+p.id).style.display="none";p.data=null});hideExtra();
+  $("lgb").disabled=$("dwb").disabled=$("xls").disabled=$("exb").disabled=$("inb").disabled=true;$("msg").textContent="";state=null;
   renderDates();
 };
-function makeSample(){            /* synthetic type-2 log (R_IN / EX_SND / R_OUT) for 16-NOV-2026 */
-  var out=[],id=330000000,t=12*3600+10,S="\u0001",seed=12345;
+function makeSample(){            /* synthetic sample for 16-NOV-2026: Type 1 (OMS tags, with strategies) + Type 2 (R_IN / EX_SND / R_OUT) */
+  var out=[],S="\u0001",seed=12345,i,j,t,STR=["ManualOrder","FS03_1001","FS03_1010"];
+  function rnd(){seed=(seed*16807)%2147483647;return seed/2147483647}
+  function ns9(sec){var s=Math.floor(sec),n=Math.round((sec-s)*1e9);if(n>=1e9){s++;n-=1e9}return p2(Math.floor(s/3600))+":"+p2(Math.floor(s%3600/60))+":"+p2(s%60)+"."+("00000000"+n).slice(-9)}
+  function L(sec,tag,body){out.push(ns9(sec)+"  ["+tag+"]  "+body)}
+  function ts(sec){var s=Math.floor(sec),u=Math.round((sec-s)*1e6);if(u>=1e6){s++;u-=1e6}return "[2026-11-16 "+p2(Math.floor(s/3600))+":"+p2(Math.floor(s%3600/60))+":"+p2(s%60)+"."+("00000"+u).slice(-6)+"][INFO]"}
+  out.push("07:44:13.003382650  [INFO]  OMS instance startup initiated on : 16-NOV-2026");
+  t=9*3600;
+  for(i=0;i<400;i++){                                   /* Type 1: NEW, 0-3 MODIFY, some CANCEL per order */
+    t+=0.03+rnd()*0.05;
+    var qt=5000+i,sg=STR[i%3],a=t,nm=i%4===0?1+Math.floor(rnd()*4):0,
+        f=function(){return (6+rnd()*20+(rnd()<.03?200+rnd()*300:0))/1e6},x=function(){return (150+rnd()*250+(rnd()<.02?1500+rnd()*2500:0))/1e6},fa=f(),xa=x();
+    L(a,"NEW_REQUEST",sg+", Agent: A1, QT_OrderID: "+qt+", ClOrdID: "+qt+", QT_Account: ACC1, SecurityID: 45403, Side: "+(i%2?"1":"2")+", Quantity: 75, Price: 95.5,");
+    L(a+fa,"EXCH_ORDER_REQUEST","QT_OrderID: "+qt+", ClOrdID: "+qt+", RequestType: NEW,");
+    L(a+fa+xa,"EXCH_ORDER_RESPONSE","QT_OrderID: "+qt+", ExecStatus: PENDING,");
+    for(j=0;j<nm;j++){
+      var b=a+0.01*(j+1),cid=qt+100000*(j+1),fb=f(),xb=x();
+      L(b,"MODIFY_REQUEST",sg+", Agent: A1, QT_OrderID: "+qt+", ClOrdID: "+cid+", Price: "+(95.5+j)+",");
+      L(b+fb,"EXCH_MODIFY_REQUEST","QT_OrderID: "+qt+", ClOrdID: "+cid+",");
+      L(b+fb+xb,"EXCH_ORDER_RESPONSE","QT_OrderID: "+qt+", ExecStatus: MODIFIED,");
+    }
+    if(i%6===1||i%6===4){
+      var c=a+0.08,cc=qt+900000,fc=f(),xc=x();
+      L(c,"CANCEL_REQUEST",sg+", "+sg+", Agent: A1, QT_OrderID: "+qt+", ClOrdID: "+cc+",");
+      L(c+fc,"EXCH_CANCEL_REQUEST","QT_OrderID: "+qt+", ClOrdID: "+cc+",");
+      L(c+fc+xc,"EXCH_ORDER_RESPONSE","QT_OrderID: "+qt+", ExecStatus: CANCELLED,");
+    }
+  }
+  var id=330000000;t=12*3600+10;
+  for(i=0;i<1500;i++){                                  /* Type 2: R_IN / EX_SND / R_OUT, matched on ClOrdID */
+    t+=0.02+rnd()*0.06+(i%300===0?2:0);
+    var ty=i%11===10?"F":i%7===6?"G":"D",cid2=String(++id),
+        fast=(6+rnd()*20+(rnd()<.03?150+rnd()*400:0))/1e6,
+        ex=(120+rnd()*250+(rnd()<.02?1500+rnd()*3000:0)+(i>600&&i<700?400:0))/1e6,
+        rej=rnd()<.02,st=rej?"8":ty==="F"?"4":ty==="G"?"5":"0";
+    out.push(ts(t)+"[R_IN] 8=FIX.4.2"+S+"9=297"+S+"35="+ty+S+"34=0"+S+"49=43830"+S+"1=47352"+S+"11="+cid2+S+"14=130"+S+"38=75"+S+"44=95.5"+S+"48=45403"+S+"54="+(i%2?"1":"2")+S+"55=NIFTY"+S+"10=000"+S);
+    out.push(ts(t+fast)+"[EX_SND] 20040,43830,84,45403,1200000130359820.000000,47352     ,1,1,0,0,650,650,130,9555,0,1479298205,1479298205,1,43830,13302OGLOBE0000093,79,GLOBE0000093,1,"+cid2+",222222222222000.000000,AAJCE8528M,111306,0,1479298205858131548,");
+    out.push(ts(t+fast+ex)+"[R_OUT] 8=FIX4.2"+S+"9=300"+S+"35="+(rej&&ty==="F"?"9":"8")+S+"49=12345"+S+"11="+cid2+S+"14=130"+S+"39="+st+S+"10=000"+S);
+  }
   return out.join("\n");
 }
 $("smp").onclick=function(){
   files=[];meta.clear();renderFiles();
-  $("txt").value=makeSample();
-  pasteD=parseDate($("txt").value);renderDates();
+  $("txt").value="";bigText=makeSample();pasteInfo();
+  pasteD=parseDate(pasteSample());renderDates();
   run();
 };
 window.addEventListener("beforeunload",killWorker);
