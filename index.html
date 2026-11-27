@@ -12,18 +12,32 @@
 .lgbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--mut)}
 .lgbar button{padding:6px 12px;font-size:12px}
 .lgbar select{padding:5px 8px;font-size:12px}
-#lgt th[data-c],#rxt th[data-rxc]{cursor:pointer;user-select:none}
-#lgt th[data-c]:hover,#rxt th[data-rxc]:hover{color:var(--tx)}
-#lgt th.asc::after,#rxt th.asc::after,table.srt th.asc::after{content:" \25B2";color:var(--ac2)}
-#lgt th.desc::after,#rxt th.desc::after,table.srt th.desc::after{content:" \25BC";color:var(--ac2)}
+#lgt th[data-c]{cursor:pointer;user-select:none}
+#lgt th[data-c]:hover{color:var(--tx)}
+#lgt th.asc::after,table.srt th.asc::after{content:" \25B2";color:var(--ac2)}
+#lgt th.desc::after,table.srt th.desc::after{content:" \25BC";color:var(--ac2)}
 table.srt th{cursor:pointer;user-select:none}
-#lgt tr.flt th,#rxt tr.flt th{top:35px;background:var(--bg2);padding:4px 6px;text-transform:none;letter-spacing:0;font-weight:400}
-#lgt tr.flt input,#lgt tr.flt select,#rxt tr.flt input{width:100%;min-width:92px;padding:5px 7px;font-size:12px;border-radius:8px}
+#lgt tr.flt th{top:35px;background:var(--bg2);padding:4px 6px;text-transform:none;letter-spacing:0;font-weight:400}
+#lgt tr.flt input,#lgt tr.flt select{width:100%;min-width:92px;padding:5px 7px;font-size:12px;border-radius:8px}
 #pnote{display:flex;gap:10px;align-items:center;justify-content:space-between;margin-top:8px}
 #pnote button{padding:3px 10px;font-size:12px}
 td.sd-b{color:#22c55e;font-weight:600}
 td.sd-s{color:#f43f5e;font-weight:600}
 td.sd-a{color:var(--mut)}
+/* RX hardware timestamps page (same output as the standalone RX page) */
+#prx{border-top:3px solid var(--ac)}
+#prx .rxs{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin:10px 0}
+#prx .rxst{background:var(--bg2);border:1px solid var(--bd);border-radius:6px;padding:8px}
+#prx .rxst b{display:block;font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.04em;font-weight:600}
+#prx .rxst span{font-size:15px;font-weight:600}
+#prx .rxr{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0}
+#prx .rxr input,#prx .rxr select{padding:6px 10px;font-size:13px}
+#prx .rxw{max-height:640px;overflow:auto}
+#prx table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
+#prx th,#prx td{text-align:right;padding:5px 9px;border-bottom:1px solid var(--bd);white-space:nowrap}
+#prx th:nth-child(-n+2),#prx td:nth-child(-n+2),#prx th:nth-child(n+7),#prx td:nth-child(n+7){text-align:left}
+#prx th{position:sticky;top:0;background:var(--bg2);font-size:12px;color:var(--mut)}
+#prx tr.h td{background:rgba(251,146,60,.22)}
 </style>
 </head>
 <body>
@@ -88,10 +102,19 @@ td.sd-a{color:var(--mut)}
     <div class="card" id="skcard" style="display:none;margin-bottom:16px"><div class="top"><h2 style="margin:0">Skipped orders <span class="dbadge" id="skn"></span></h2></div><div class="note">Skipped because the step time difference is negative or longer than 5 hours (log clocks / timezones out of sync, e.g. EX_SND logged 5:30 h away from R_IN). They are excluded from every statistic and graph.</div><div class="tw mx"><table class="srt" id="skt"></table></div></div>
     <div class="card" id="pdw" style="display:none;margin-bottom:16px"><div class="top"><h2 style="margin:0">Date-wise analysis</h2></div><div class="note">One block per log date. If a date has files in different log formats, each format is listed separately (Type 1 = NEW_REQUEST / EXCH_* tags, Type 2 = R_IN / EX_SND / R_OUT). Each row is split by Side (All / Buy / Sell). The side is taken from the NEW request and applied to every MODIFY / CANCEL of the same order (same ClOrdID / QT_OrderID). All values in microseconds.</div><div id="dwbody"></div></div>
     <div class="card" id="prx" style="display:none;margin-bottom:16px">
-      <div class="top"><h2 style="margin:0">RX hardware timestamp analysis</h2>
-        <span class="lgbar"><span id="rx_info"></span><button id="rx_rst">Reset filters &amp; sort</button></span></div>
-      <div class="note">Each row pairs the latest RX_HW_TS with the next EXCH_ORDER_RESPONSE. Heartbeat lines are ignored. Conversion uses the most recent RX_CALIBRATION values: PHC = phc_ref + (RX_HW_TS - rx_ref) &times; scale. The difference is converted IST minus the RX_HW_TS log timestamp. Positive means the converted hardware time is later than the log timestamp. PHC must be UTC-synchronized for the absolute IST time to be valid.</div>
-      <div class="tw lgw"><table id="rxt"></table></div>
+      <div class="top"><h2 style="margin:0">RX hardware timestamps</h2><span class="lgbar" id="rx_msg"></span></div>
+      <div class="note">One row per exchange response. TX = last TX line before <code>EXCH_ORDER/CANCEL/MODIFY_REQUEST</code>. RX = first data RX line after the <code>[PENDING|UPDATE|CANCEL|MODIFY]_RESPONSE</code> line. Matched by ClOrdID, never by seq.</div>
+      <div class="rxs" id="rx_stats"></div>
+      <div class="rxr">
+        <input id="rx_fl" placeholder="Filter ClOrdId / type / status" style="width:220px">
+        <select id="rx_so"><option value="t">Sort: log order</option><option value="hw">Sort: RX&minus;TX diff (high first)</option><option value="lg">Sort: log latency (high first)</option></select>
+        <input id="rx_th" type="number" placeholder="Highlight diff &ge; &micro;s" style="width:170px">
+        <button id="rx_pv">&lsaquo;</button><span id="rx_pg"></span><button id="rx_nx">&rsaquo;</button>
+        <button id="rx_xl">Download Excel (CSV)</button>
+      </div>
+      <div class="rxw"><table>
+        <thead><tr><th>Req log time</th><th>ClOrdId</th><th>Order latency (log) &micro;s</th><th>TX DONE (ns)</th><th>RX_PHC (ns)</th><th>RX_PHC &minus; TX DONE &micro;s</th><th>Type</th><th>Status</th><th>Resp log time</th></tr></thead>
+        <tbody id="rx_tb"></tbody></table></div>
     </div>
     <div class="card" id="plg" style="display:none;margin-bottom:16px">
       <div class="top"><h2 style="margin:0">Log analysis &mdash; every measurement</h2>
@@ -145,7 +168,6 @@ var EQ,EK,ET,EN,ES,EG,EC,EY,Ost=[],clArr=[""],clMap=new Map(),stratArr=[""],stra
 var Omap,Oqt,Ocl,Oex,Oac,Osec,Osd,Oqy,Opr,ON,OS;   /* orders */
 var Q,R,cmap,stArr,stMap,stRej,scanned,matched,ready=false;
 var Odl=[],curOff=0,curDi=0,curDl="",DM=[],dayLbl={};
-var rxCalibration=null,rxPending=null,rxRows=[];
 var curFmt=0,skipC={},dwRows=[],FMTN=["Type 1 (NEW_REQUEST / EXCH_* tags)","Type 2 (R_IN / EX_SND / R_OUT)"];
 var P=new Map(),SM=new Map(),curDms=null,lastDs="",lastExtra=0,skipN=0,skipL=[],SKIP_NS=5*3600e9;   /* skip a step if it is negative or longer than 5 h (clock / timezone mismatch) */
 function addSkip(id,why,d){skipN++;var gk=curDi*2+curFmt;skipC[gk]=(skipC[gk]||0)+1;if(skipL.length<500)skipL.push({id:id,why:why,d:d,dl:curDl})}   /* type-2 (R_IN/EX_SND/R_OUT) state */   /* per-date context */
@@ -175,7 +197,7 @@ function reset(){
   ON=new Grow(Uint32Array,6144);OS=new Grow(Float64Array,6144);
   Q=new Map();R=new Map();cmap=new Map();P=new Map();SM=new Map();skipN=0;skipL=[];skipC={};dwRows=[];
   stArr=[""];stMap=new Map([["",0]]);stRej=[false];
-  scanned=0;matched=0;ready=false;rxCalibration=null;rxPending=null;rxRows=[];
+  scanned=0;matched=0;ready=false;rxReset();
 }
 function sid(s){
   var i=stMap.get(s);
@@ -227,57 +249,73 @@ function tsBefore(line,i){
   return (h*3600+m*60+sec)*1e9+fr;
 }
 
-function rxIst(ns){
-  ns+=19800000000000n;
-  var sec=Number(ns/1000000000n),nano=Number(ns%1000000000n);
-  var d=new Date(sec*1000);
-  function z(v,n){return ("000000000"+v).slice(-n)}
-  return z(d.getUTCDate(),2)+"-"+["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"][d.getUTCMonth()]+"-"+d.getUTCFullYear()+" "+z(d.getUTCHours(),2)+":"+z(d.getUTCMinutes(),2)+":"+z(d.getUTCSeconds(),2)+"."+z(nano,9)+" IST";
+/* ---- RX hardware timestamps (same logic as the standalone RX page) ----
+   One row per EXCH_ORDER_RESPONSE.
+   TX = last "TX seq=.. end_seq=.. len=.. DONE=.." line (len>0) before EXCH_ORDER/MODIFY/CANCEL_REQUEST.
+   RX = first data "RX seq=.. ack=.. dlen=.. RX_HW_TS=.. RX_PHC=.." line (dlen>0) after the response line.
+   Matched by ClOrdID, never by seq. */
+var RX_T=/^(\d{2}):(\d{2}):(\d{2})\.(\d{1,9})/,
+    RX_TX=/TX seq=\d+ end_seq=\d+ len=(\d+).*?DONE=(\d+)/,
+    RX_RX=/RX seq=\d+ ack=\d+ dlen=(\d+) RX_HW_TS=\d+ RX_PHC=(\d+)/,
+    RX_REQ=/EXCH_(ORDER|MODIFY|CANCEL)_REQUEST/,
+    RX_CL=/ClOrdI[dD]\s*[=:]?\s*"?(\d+)/,
+    RX_ST=/ExecStatus\s*[=:]?\s*([A-Z_]+)/,
+    RX_TAG=/\[[A-Z]+_RESPONSE\]/,RX_DAY=86400e9;
+var rxLastTx=null,rxPend=null,rxWait=[],rxBy=new Map(),rxOut=[],rxNoReq=0,rxDi=-1;
+function rxReset(){rxLastTx=null;rxPend=null;rxWait=[];rxBy=new Map();rxOut=[];rxNoReq=0;rxDi=-1}
+function rxTns(l){var m=RX_T.exec(l);if(!m)return null;return ((+m[1]*3600+ +m[2]*60+ +m[3])*1e9)+ +((m[4]+"00000000").slice(0,9))}
+function rxHms(l){var m=/^\d{2}:\d{2}:\d{2}\.\d+/.exec(l);return m?m[0]:""}
+function rxFin(){if(!rxPend)return;rxWait.push(rxPend);rxOut.push(rxPend);rxPend=null}
+function rx2(l){
+  var m,k,c;
+  if(curDi!==rxDi){rxFin();rxWait=[];rxLastTx=null;rxDi=curDi}      /* new date: do not carry TX / RX state across */
+  if(l.indexOf("TX seq=")>-1){
+    m=RX_TX.exec(l);
+    if(m&&+m[1]>0)rxLastTx=m[2];
+    else if(/len=[1-9]/.test(l)&&l.indexOf("DONE=NOT_SEEN")>-1)rxLastTx="";
+    return;
+  }
+  if(l.indexOf("RX seq=")>-1){
+    m=RX_RX.exec(l);
+    if(m&&+m[1]>0){
+      rxFin();
+      for(k=0;k<rxWait.length;k++)rxWait[k].rx=m[2];
+      rxWait=[];
+    }
+    return;
+  }
+  if(l.indexOf("EXCH_")>-1){
+    m=RX_REQ.exec(l);
+    if(m){
+      c=RX_CL.exec(l);
+      if(c)rxBy.set(curDi+"\u0001"+c[1],{time:rxHms(l),t0:rxTns(l),type:m[1],tx:rxLastTx||null});
+      rxLastTx=null;
+      return;
+    }
+    if(l.indexOf("EXCH_ORDER_RESPONSE")>-1){
+      rxFin();
+      var c2=RX_CL.exec(l),s=RX_ST.exec(l),rq=c2?rxBy.get(curDi+"\u0001"+c2[1]):null;
+      if(!rq)rxNoReq++;
+      rxPend={cl:c2?c2[1]:"",st:s?s[1]:"",t1:rxTns(l),rt:rxHms(l),req:rq,rx:null};
+      return;
+    }
+  }
+  if(rxPend&&l.indexOf("_RESPONSE]")>-1&&RX_TAG.test(l))rxFin();
 }
-function rxTimeOfDayDiff(converted,logNs){
-  var day=86400000000000n;
-  var hw=((converted+19800000000000n)%day+day)%day;
-  var log=BigInt(Math.round(logNs));
-  var diff=hw-log;
-  if(diff>day/2n)diff-=day;
-  else if(diff< -day/2n)diff+=day;
-  return diff.toString();
-}
-function rxLogEpoch(t){
-  if(curDms==null)return null;
-  var sec=Math.floor(t/1e9),nano=Math.round(t-sec*1e9);
-  return BigInt(curDms)*1000000n+BigInt(sec)*1000000000n+BigInt(nano)-19800000000000n;
-}
-function rxPair(r){
-  if(!rxPending||!rxCalibration)return;
-  var cid=getF(r,"ClOrdID"),exid=getF(r,"ExchOrderID")||getF(r,"ExchOrdID");
-  if(!cid)return;
-  try{
-    var cal=rxCalibration,raw=BigInt(rxPending.raw),ref=BigInt(cal.rx),phc=BigInt(cal.phc);
-    var scale=BigInt(cal.scaleFixed),converted=phc+((raw-ref)*scale)/1000000000000000n;
-    var logEpoch=rxLogEpoch(rxPending.logNs);
-    rxRows.push({
-      date:curDl,clordid:cid,exchorderid:exid,rxhw:rxPending.raw,
-      rxlog:rxPending.logText,rxist:rxIst(converted),
-      diff:logEpoch==null?rxTimeOfDayDiff(converted,rxPending.logNs):(converted-logEpoch).toString(),
-      phc:converted.toString(),rxref:cal.rx,phcref:cal.phc,scale:cal.scale
-    });
-  }catch(e){}
-  rxPending=null;
+function rxBuild(){
+  rxFin();
+  var rows=[],i,e,q,lg,hw,tx;
+  for(i=0;i<rxOut.length;i++){
+    e=rxOut[i];q=e.req;lg=null;hw=null;tx=q?q.tx:null;
+    if(q&&q.t0!=null&&e.t1!=null){lg=e.t1-q.t0;if(lg<0)lg+=RX_DAY}
+    if(tx&&e.rx){try{hw=Number(BigInt(e.rx)-BigInt(tx))}catch(x){}}
+    rows.push({time:q?q.time:e.rt,cl:e.cl,lg:lg,hw:hw,tx:tx,rx:e.rx,type:q?q.type:"",st:e.st,rt:e.rt});
+  }
+  return rows;
 }
 function handle(line){
   scanned++;curFmt=0;
-  var cm=/RX_CALIBRATION\s+rx_ref=(\d+)\s+phc_ref=(\d+)\s+scale=([0-9.]+)/.exec(line);
-  if(cm){
-    var sf=cm[3].split("."),frac=(sf[1]||"").slice(0,15);
-    rxCalibration={rx:cm[1],phc:cm[2],scale:cm[3],scaleFixed:BigInt(sf[0])*1000000000000000n+BigInt((frac+"000000000000000").slice(0,15))};
-  }
-  var ri=line.indexOf("RX_HW_TS=");
-  if(ri>=0){
-    var rawm=/RX_HW_TS=(\d+)/.exec(line),tm=/^(\d{2}):(\d{2}):(\d{2})\.(\d{1,9})/.exec(line),rxt=NaN;
-    if(tm){var ff=tm[4];while(ff.length<9)ff+="0";rxt=(+tm[1]*3600+ +tm[2]*60+ +tm[3])*1e9+ +ff;}
-    if(rawm&&rxt===rxt)rxPending={raw:rawm[1],logNs:rxt,logText:(function(){var q=Math.floor(rxt/1e9),n=Math.round(rxt-q*1e9);return p2(Math.floor(q/3600))+":"+p2(Math.floor(q%3600/60))+":"+p2(q%60)+"."+("00000000"+n).slice(-9)})()};
-  }
+  rx2(line);
   var c0=line.charCodeAt(0);
   if(c0!==91&&(c0===9||c0===32||c0===76)){      /* tolerate editor "Find in files" prefixes: "<tab>Line 217115: [2026-..." */
     var pm=/^\s*(?:Line\s*\d+\s*:\s*)?(?=\[\d{4}-\d{2}-\d{2} )/.exec(line);
@@ -292,7 +330,6 @@ function handle(line){
       var tag=line.substring(i+1,j),c=TAGC.get(tag);
       if(c===undefined)c=TAGC.get(tag.toUpperCase());
       if(c===undefined)return;
-      if(c===6)rxPair(line.substring(j+1));
       proc(c,t+curOff,line.substring(j+1));
       return;
     }
@@ -507,8 +544,9 @@ function finish(ms){
   all.sort();stats.fast_ALL=calc(all);
   Q.clear();R.clear();cmap.clear();P.clear();SM.clear();
   statsCache=stats;dwRows=dwCompute();
+  var rxRows=rxBuild(),rxNo=rxNoReq;
   ready=true;
-  postMessage({type:"done",ml:ML,stats:stats,orders:Oqt.length,scanned:scanned,matched:matched,events:N,ms:ms,dmap:DM,skipped:skipN,skipList:skipL,dw:dwRows,rxRows:rxRows});
+  postMessage({type:"done",ml:ML,stats:stats,orders:Oqt.length,scanned:scanned,matched:matched,events:N,ms:ms,dmap:DM,skipped:skipN,skipList:skipL,dw:dwRows,rxRows:rxRows,rxNoReq:rxNo});
 }
 
 /* ---- per-order table (paged/filtered here, only 500 rows cross to the UI) ---- */
@@ -811,7 +849,7 @@ function setBusy(b){
   busy=b;
   $("go").disabled=b;$("smp").disabled=b;
   $("prog").style.display=b?"block":"none";
-  if(b){$("bar").style.width="0";$("lgb").disabled=$("dwb").disabled=$("inb").disabled=$("exb").disabled=$("xls").disabled=true}
+  if(b){$("bar").style.width="0";$("lgb").disabled=$("dwb").disabled=$("inb").disabled=$("exb").disabled=$("xls").disabled=true;$("rxb").disabled=true}
 }
 
 /* ---------- date detection / selection ---------- */
@@ -1235,50 +1273,70 @@ document.addEventListener("click",function(e){
   rows.sort(function(a,b){var x=val(a),y=val(b);if(typeof x==="number"&&typeof y==="number")return (x-y)*dir;x=String(x);y=String(y);return (x<y?-1:x>y?1:0)*dir});
   rows.forEach(function(r){body.appendChild(r)});
 });
-/* ---------- RX hardware timestamp analysis ---------- */
-var rxSort={c:"date",d:1},rxFilters={};
-var RXCOLS=[
- ["date","Date"],["clordid","ClOrdID"],["exchorderid","ExchOrderID"],
- ["rxhw","RX_HW_TS"],["rxlog","Log timestamp"],["rxist","Converted IST"],
- ["diff","Diff (ns)"],["diffus","Diff (us)"],["phc","Converted PHC ns"],
- ["rxref","Calibration RX ref"],["phcref","Calibration PHC ref"],["scale","Scale"]
-];
-function rxVal(r,k){
- if(k==="diffus")return r.diff===""? "":(Number(r.diff)/1000).toFixed(3);
- return r[k]==null?"":String(r[k]);
+
+/* ---------- RX hardware timestamps (same page / output as the standalone RX tool) ---------- */
+var rxRows=[],rxView=[],rxPage=0,RXPS=200;
+function rxFmt(ns){return ns==null?"\u2014":(ns/1000).toFixed(3)}
+function rxPct(a,p){return a[Math.min(a.length-1,Math.ceil(p/100*a.length)-1)]}
+function rxSet(a){
+  if(!a.length)return null;
+  a=a.slice().sort(function(x,y){return x-y});
+  var s=0,i;for(i=0;i<a.length;i++)s+=a[i];
+  return {n:a.length,avg:s/a.length,min:a[0],max:a[a.length-1],p90:rxPct(a,90),p99:rxPct(a,99)};
 }
-function renderRX(){
- var rows=(state&&state.rxRows)||[],filtered=rows.filter(function(r){
-   return RXCOLS.every(function(c){var f=(rxFilters[c[0]]||"").toLowerCase();return !f||rxVal(r,c[0]).toLowerCase().indexOf(f)>=0});
- });
- var k=rxSort.c,d=rxSort.d;
- filtered.sort(function(a,b){
-   var x=rxVal(a,k),y=rxVal(b,k),nx=Number(x),ny=Number(y);
-   var numeric=x!==""&&y!==""&&isFinite(nx)&&isFinite(ny);
-   return (numeric?nx-ny:(x<y?-1:x>y?1:0))*d;
- });
- var h="<thead><tr>"+RXCOLS.map(function(c){return "<th data-rxc='"+c[0]+"' class='"+(rxSort.c===c[0]?(d>0?"asc":"desc"):"")+"'>"+c[1]+"</th>"}).join("")+"</tr><tr class='flt'>"+
- RXCOLS.map(function(c){return "<th><input data-rxf='"+c[0]+"' value='"+esc(rxFilters[c[0]]||"")+"' placeholder='filter...'></th>"}).join("")+"</tr></thead><tbody>";
- filtered.forEach(function(r){h+="<tr>"+RXCOLS.map(function(c){var v=c[0]==="diffus"?(r.diff===""?"":(Number(r.diff)/1000).toFixed(3)):rxVal(r,c[0]);return "<td>"+esc(v)+"</td>"}).join("")+"</tr>"});
- h+="</tbody>";$("rxt").innerHTML=h;
- $("rx_info").textContent=fmtN(filtered.length)+" of "+fmtN(rows.length)+" matched response(s)";
+function rxStats(){
+  var hw=[],lgs=[],h="";
+  rxRows.forEach(function(r){if(r.hw!=null)hw.push(r.hw);if(r.lg!=null)lgs.push(r.lg)});
+  [["RX\u2212TX diff",rxSet(hw)],["Log latency",rxSet(lgs)]].forEach(function(p){
+    var s=p[1];
+    if(!s){h+='<div class="rxst"><b>'+p[0]+'</b><span>no data</span></div>';return}
+    h+='<div class="rxst"><b>'+p[0]+' count</b><span>'+s.n+'</span></div>'+
+      ["avg","min","max","p90","p99"].map(function(k){return '<div class="rxst"><b>'+p[0]+' '+k+' \u00b5s</b><span>'+rxFmt(s[k])+'</span></div>'}).join("");
+  });
+  $("rx_stats").innerHTML=h;
+}
+function rxApply(){
+  var f=$("rx_fl").value.trim().toLowerCase(),s=$("rx_so").value;
+  rxView=f?rxRows.filter(function(r){return (r.cl+" "+r.type+" "+r.st).toLowerCase().indexOf(f)>-1}):rxRows.slice();
+  if(s==="hw")rxView.sort(function(a,b){return (b.hw==null?-1:b.hw)-(a.hw==null?-1:a.hw)});
+  if(s==="lg")rxView.sort(function(a,b){return (b.lg==null?-1:b.lg)-(a.lg==null?-1:a.lg)});
+  rxPage=0;rxDraw();
+}
+function rxDraw(){
+  var th=parseFloat($("rx_th").value),pages=Math.max(1,Math.ceil(rxView.length/RXPS));
+  if(rxPage>=pages)rxPage=pages-1;
+  var a=rxView.slice(rxPage*RXPS,rxPage*RXPS+RXPS),h=[],i,r;
+  for(i=0;i<a.length;i++){r=a[i];
+    h.push("<tr"+(th>0&&r.hw!=null&&r.hw/1000>=th?' class="h"':"")+"><td>"+esc(r.time)+"</td><td>"+esc(r.cl)+"</td><td>"+rxFmt(r.lg)+"</td><td>"+(r.tx||"\u2014")+"</td><td>"+(r.rx||"\u2014")+"</td><td>"+rxFmt(r.hw)+"</td><td>"+esc(r.type)+"</td><td>"+esc(r.st)+"</td><td>"+esc(r.rt)+"</td></tr>");
+  }
+  $("rx_tb").innerHTML=h.join("");
+  $("rx_pg").textContent=" "+(rxPage+1)+" / "+pages+" ("+rxView.length+" rows) ";
 }
 function showRX(){
- if(!state)return;
- PANELS.forEach(function(p){$("p_"+p.id).style.display="none"});
- hideExtra();renderRX();$("prx").style.display="block";$("prx").scrollIntoView({behavior:"smooth",block:"start"});
+  if(!state)return;
+  PANELS.forEach(function(p){$("p_"+p.id).style.display="none"});
+  hideExtra();
+  rxRows=state.rxRows||[];
+  var np=rxRows.filter(function(r){return r.hw==null}).length;
+  $("rx_msg").textContent=rxRows.length+" responses"+(np?", "+np+" without TX/RX pair":"")+(state.rxNoReq?", "+state.rxNoReq+" with no request in log":"");
+  $("rx_xl").disabled=!rxRows.length;
+  rxStats();rxApply();
+  $("prx").style.display="block";$("prx").scrollIntoView({behavior:"smooth",block:"start"});
 }
 $("rxb").onclick=showRX;
-$("rxt").addEventListener("click",function(e){
- var th=e.target.closest&&e.target.closest("th[data-rxc]");if(!th)return;
- var c=th.getAttribute("data-rxc");rxSort=(rxSort.c===c)?{c:c,d:-rxSort.d}:{c:c,d:1};renderRX();
-});
-$("rxt").addEventListener("input",function(e){
- var k=e.target.getAttribute&&e.target.getAttribute("data-rxf");if(!k)return;
- rxFilters[k]=e.target.value;renderRX();
- var el=$("rxt").querySelector("[data-rxf='"+k+"']");if(el){el.focus();el.setSelectionRange(el.value.length,el.value.length)}
-});
-$("rx_rst").onclick=function(){rxFilters={};rxSort={c:"date",d:1};renderRX()};
+$("rx_so").onchange=rxApply;
+$("rx_fl").oninput=rxApply;
+$("rx_th").oninput=rxDraw;
+$("rx_pv").onclick=function(){if(rxPage>0){rxPage--;rxDraw()}};
+$("rx_nx").onclick=function(){if((rxPage+1)*RXPS<rxView.length){rxPage++;rxDraw()}};
+$("rx_xl").onclick=function(){
+  var o=["Req log time,ClOrdId,Order latency (log) us,TX DONE ns,RX_PHC ns,RX_PHC - TX DONE us,Type,Status,Resp log time"];
+  rxView.forEach(function(r){o.push([r.time,'="'+r.cl+'"',r.lg==null?"":(r.lg/1000).toFixed(3),r.tx?'="'+r.tx+'"':"",r.rx?'="'+r.rx+'"':"",r.hw==null?"":(r.hw/1000).toFixed(3),r.type,r.st,r.rt].join(","))});
+  var a=document.createElement("a");
+  a.href=URL.createObjectURL(new Blob(["\ufeff"+o.join("\r\n")],{type:"text/csv"}));
+  a.download="rx_hw_timestamps.csv";document.body.appendChild(a);a.click();
+  setTimeout(function(){URL.revokeObjectURL(a.href);a.remove()},500);
+};
 
 /* ---------- date-wise analysis ---------- */
 var DWFN=["Type 1 \u00b7 OMS tags (NEW_REQUEST / EXCH_*)","Type 2 \u00b7 R_IN / EX_SND / R_OUT"],
@@ -1355,16 +1413,19 @@ window.addEventListener("resize",function(){clearTimeout(rz);rz=setTimeout(funct
 $("q").oninput=function(e){var v=e.target.value.trim();clearTimeout(ot);ot=setTimeout(function(){requestOrders(v)},200)};
 $("clr").onclick=function(){
   killWorker();setBusy(false);files=[];meta.clear();sel={};pasteD=null;renderFiles();
-  $("txt").value="";bigText="";pasteInfo();$("res").style.display="none";$("prx").style.display="none";rxFilters={};
+  $("txt").value="";bigText="";pasteInfo();$("res").style.display="none";$("prx").style.display="none";
+  rxRows=[];rxView=[];rxPage=0;$("rx_fl").value="";$("rx_th").value="";$("rx_so").value="t";
   PANELS.forEach(function(p){$("p_"+p.id).style.display="none";p.data=null});hideExtra();
   $("lgb").disabled=$("rxb").disabled=$("dwb").disabled=$("xls").disabled=$("exb").disabled=$("inb").disabled=true;$("msg").textContent="";state=null;
   renderDates();
 };
-function makeSample(){            /* synthetic sample for 16-NOV-2026: Type 1 (OMS tags, with strategies) + Type 2 (R_IN / EX_SND / R_OUT) */
-  var out=[],S="\u0001",seed=12345,i,j,t,STR=["ManualOrder","FS03_1001","FS03_1010"];
+function makeSample(){            /* synthetic sample for 16-NOV-2026: Type 1 (OMS tags, with strategies + TX/RX lines) + Type 2 (R_IN / EX_SND / R_OUT) */
+  var out=[],S="\u0001",seed=12345,i,j,t,STR=["ManualOrder","FS03_1001","FS03_1010"],txSeq=1000,rxSeq=5000,phc=1700000000000000000;
   function rnd(){seed=(seed*16807)%2147483647;return seed/2147483647}
   function ns9(sec){var s=Math.floor(sec),n=Math.round((sec-s)*1e9);if(n>=1e9){s++;n-=1e9}return p2(Math.floor(s/3600))+":"+p2(Math.floor(s%3600/60))+":"+p2(s%60)+"."+("00000000"+n).slice(-9)}
   function L(sec,tag,body){out.push(ns9(sec)+"  ["+tag+"]  "+body)}
+  function TXL(sec){var d=Math.round(300+rnd()*900),b=txSeq;txSeq+=100;out.push(ns9(sec)+"  [INFO]  TX seq="+b+" end_seq="+txSeq+" len=100 DONE="+(phc+Math.round(sec*1e9)+d))}   /* logged BEFORE the EXCH_*_REQUEST */
+  function RXL(sec){var b=rxSeq;rxSeq+=100;out.push(ns9(sec)+"  [INFO]  RX seq="+b+" ack="+txSeq+" dlen=100 RX_HW_TS="+Math.round(rnd()*1e14)+" RX_PHC="+(phc+Math.round(sec*1e9)-Math.round(rnd()*2000)))}   /* logged AFTER the EXCH_ORDER_RESPONSE */
   function ts(sec){var s=Math.floor(sec),u=Math.round((sec-s)*1e6);if(u>=1e6){s++;u-=1e6}return "[2026-11-16 "+p2(Math.floor(s/3600))+":"+p2(Math.floor(s%3600/60))+":"+p2(s%60)+"."+("00000"+u).slice(-6)+"][INFO]"}
   out.push("07:44:13.003382650  [INFO]  OMS instance startup initiated on : 16-NOV-2026");
   t=9*3600;
@@ -1373,19 +1434,25 @@ function makeSample(){            /* synthetic sample for 16-NOV-2026: Type 1 (O
     var qt=5000+i,sg=STR[i%3],a=t,nm=i%4===0?1+Math.floor(rnd()*4):0,
         f=function(){return (6+rnd()*20+(rnd()<.03?200+rnd()*300:0))/1e6},x=function(){return (150+rnd()*250+(rnd()<.02?1500+rnd()*2500:0))/1e6},fa=f(),xa=x();
     L(a,"NEW_REQUEST",sg+", Agent: A1, QT_OrderID: "+qt+", ClOrdID: "+qt+", QT_Account: ACC1, SecurityID: 45403, Side: "+(i%2?"1":"2")+", Quantity: 75, Price: 95.5,");
+    TXL(a+fa-0.000001);
     L(a+fa,"EXCH_ORDER_REQUEST","QT_OrderID: "+qt+", ClOrdID: "+qt+", RequestType: NEW,");
-    L(a+fa+xa,"EXCH_ORDER_RESPONSE","QT_OrderID: "+qt+", ExecStatus: PENDING,");
+    L(a+fa+xa,"EXCH_ORDER_RESPONSE","QT_OrderID: "+qt+", ClOrdID: "+qt+", ExecStatus: PENDING,");
+    RXL(a+fa+xa+0.000003);
     for(j=0;j<nm;j++){
       var b=a+0.01*(j+1),cid=qt+100000*(j+1),fb=f(),xb=x();
       L(b,"MODIFY_REQUEST",sg+", Agent: A1, QT_OrderID: "+qt+", ClOrdID: "+cid+", Price: "+(95.5+j)+",");
+      TXL(b+fb-0.000001);
       L(b+fb,"EXCH_MODIFY_REQUEST","QT_OrderID: "+qt+", ClOrdID: "+cid+",");
-      L(b+fb+xb,"EXCH_ORDER_RESPONSE","QT_OrderID: "+qt+", ExecStatus: MODIFIED,");
+      L(b+fb+xb,"EXCH_ORDER_RESPONSE","QT_OrderID: "+qt+", ClOrdID: "+cid+", ExecStatus: MODIFIED,");
+      RXL(b+fb+xb+0.000003);
     }
     if(i%6===1||i%6===4){
       var c=a+0.08,cc=qt+900000,fc=f(),xc=x();
       L(c,"CANCEL_REQUEST",sg+", "+sg+", Agent: A1, QT_OrderID: "+qt+", ClOrdID: "+cc+",");
+      TXL(c+fc-0.000001);
       L(c+fc,"EXCH_CANCEL_REQUEST","QT_OrderID: "+qt+", ClOrdID: "+cc+",");
-      L(c+fc+xc,"EXCH_ORDER_RESPONSE","QT_OrderID: "+qt+", ExecStatus: CANCELLED,");
+      L(c+fc+xc,"EXCH_ORDER_RESPONSE","QT_OrderID: "+qt+", ClOrdID: "+cc+", ExecStatus: CANCELLED,");
+      RXL(c+fc+xc+0.000003);
     }
   }
   var id=330000000;t=12*3600+10;
